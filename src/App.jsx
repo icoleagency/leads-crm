@@ -7,6 +7,15 @@ const C = {
   green:'#3fd08a', amber:'#f5b942', red:'#e5573f', blue:'#4aa8ff'
 }
 
+function useIsMobile(){
+  const [m,setM] = useState(typeof window!=='undefined' && window.innerWidth<860)
+  useEffect(()=>{
+    const on=()=>setM(window.innerWidth<860)
+    window.addEventListener('resize',on); return ()=>window.removeEventListener('resize',on)
+  },[])
+  return m
+}
+
 function eqOf(l){ return l.arv>0 ? Math.min(100, Math.round((1 - l.owed/l.arv)*100)) : 0 }
 function scoreOf(l){
   const fresh = l.freshness
@@ -29,12 +38,14 @@ const BLANK = { name:'', address:'', city:'', state:'NJ', lead_type:'Lis Pendens
   arv:'', owed:'', phone:'', freshness:100, times_contacted:0, motivation:50, skiptraced:false }
 
 export default function App(){
+  const isMobile = useIsMobile()
   const [leads,setLeads] = useState([])
   const [loading,setLoading] = useState(true)
   const [selId,setSelId] = useState(null)
   const [showAdd,setShowAdd] = useState(false)
   const [form,setForm] = useState(BLANK)
   const [filter,setFilter] = useState('All')
+  const [menuOpen,setMenuOpen] = useState(false)
 
   useEffect(()=>{ load() },[])
   async function load(){
@@ -66,15 +77,17 @@ export default function App(){
   const sel = leads.find(l=>l.id===selId) || shown[0] || null
   const set = (k,v)=> setForm({...form,[k]:v})
 
+  const navItems = [['☺','Leads + VA',true],['◧','Command Center'],['≣','Pipeline'],['⊞','Comping'],['★','Academy']]
+
   return (
     <div style={{display:'flex',minHeight:'100vh',background:C.navy,fontFamily:'Helvetica Neue,Arial',color:C.cream}}>
-      {/* Sidebar */}
+      {!isMobile &&
       <div style={{width:210,background:C.ink,borderRight:`1px solid ${C.line}`,padding:'22px 14px',display:'flex',flexDirection:'column',flexShrink:0}}>
         <div style={{padding:'0 6px 20px',borderBottom:`1px solid ${C.line}`,marginBottom:14}}>
           <div style={{fontFamily:'Georgia,serif',fontSize:20,fontWeight:800,lineHeight:1}}>WHOLESALE<span style={{color:C.orange}}>OS</span></div>
           <div style={{color:C.muted,fontSize:9,letterSpacing:2,textTransform:'uppercase',marginTop:4}}>by Icole Agency</div>
         </div>
-        {[['☺','Leads + VA',true],['◧','Command Center'],['≣','Pipeline'],['⊞','Comping'],['★','Academy']].map(([i,l,active],k)=>(
+        {navItems.map(([i,l,active],k)=>(
           <div key={k} style={{display:'flex',alignItems:'center',gap:11,background:active?C.orange:'transparent',color:active?C.ink:C.muted,borderRadius:9,padding:'11px 13px',fontSize:13,fontWeight:600,marginBottom:3,cursor:'pointer'}}>
             <span style={{fontSize:15}}>{i}</span>{l}
           </div>
@@ -85,82 +98,97 @@ export default function App(){
           <div style={{fontSize:12,marginTop:5}}>124 dials · 19 contacts</div>
           <div style={{color:C.green,fontSize:12}}>4 appointments set</div>
         </div>
-      </div>
+      </div>}
 
-      {/* Main */}
-      <div style={{flex:1,padding:'26px 30px',minWidth:0}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:18}}>
-          <div>
-            <h1 style={{fontFamily:'Georgia,serif',fontSize:27,margin:0,fontWeight:600}}>Leads + Your VA</h1>
-            <p style={{color:C.muted,margin:'3px 0 0',fontSize:13.5}}>Ranked by lead quality — freshness, contact history, motivation, equity & skip-trace.</p>
-          </div>
-          <button onClick={()=>setShowAdd(!showAdd)} style={{background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'11px 20px',fontWeight:800,cursor:'pointer',whiteSpace:'nowrap'}}>{showAdd?'Close':'+ Add Lead'}</button>
-        </div>
+      <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column'}}>
 
-        {showAdd &&
-        <div style={{background:C.panel,border:`1px solid ${C.line}`,borderRadius:14,padding:20,marginBottom:18}}>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10}}>
-            <In ph="Owner name" v={form.name} on={v=>set('name',v)}/>
-            <In ph="Phone" v={form.phone} on={v=>set('phone',v)}/>
-            <In ph="Address" v={form.address} on={v=>set('address',v)}/>
-            <In ph="City" v={form.city} on={v=>set('city',v)}/>
-            <Sel v={form.state} on={v=>set('state',v)} opts={['NJ','FL','DE','PA','Other']}/>
-            <Sel v={form.lead_type} on={v=>set('lead_type',v)} opts={['Lis Pendens','Pre-Foreclosure','Tax Delinquent','Vacant','Inherited','Divorce']}/>
-            <In ph="ARV ($)" v={form.arv} on={v=>set('arv',v)} type="number"/>
-            <In ph="Owed ($)" v={form.owed} on={v=>set('owed',v)} type="number"/>
-            <div/>
-          </div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:14,marginTop:14}}>
-            <Slider label={`Freshness: ${form.freshness}`} v={form.freshness} mn={0} mx={100} on={v=>set('freshness',v)}/>
-            <Slider label={`Motivation: ${form.motivation}`} v={form.motivation} mn={0} mx={100} on={v=>set('motivation',v)}/>
-            <Slider label={`Times called before: ${form.times_contacted}`} v={form.times_contacted} mn={0} mx={6} on={v=>set('times_contacted',v)}/>
-          </div>
-          <label style={{display:'flex',gap:8,alignItems:'center',marginTop:14,fontSize:13,color:C.muted}}>
-            <input type="checkbox" checked={form.skiptraced} onChange={e=>set('skiptraced',e.target.checked)}/> Skip-trace confirmed
-          </label>
-          <button onClick={add} style={{marginTop:16,background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'11px 22px',fontWeight:800,cursor:'pointer'}}>Save Lead</button>
+        {isMobile &&
+        <div style={{background:C.ink,borderBottom:`1px solid ${C.line}`,padding:'14px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <div style={{fontFamily:'Georgia,serif',fontSize:18,fontWeight:800}}>WHOLESALE<span style={{color:C.orange}}>OS</span></div>
+          <button onClick={()=>setMenuOpen(!menuOpen)} style={{background:'transparent',border:`1px solid ${C.line}`,color:C.cream,borderRadius:8,padding:'6px 12px',fontSize:18,cursor:'pointer'}}>☰</button>
         </div>}
-
-        <div style={{display:'flex',gap:8,marginBottom:14}}>
-          {['All','NJ','FL','DE','PA'].map(s=>(
-            <button key={s} onClick={()=>setFilter(s)} style={{border:`1px solid ${filter===s?C.orange:C.line}`,background:filter===s?C.orange:'transparent',color:filter===s?C.ink:C.muted,borderRadius:20,padding:'6px 14px',fontWeight:600,cursor:'pointer',fontSize:13}}>{s}</button>
+        {isMobile && menuOpen &&
+        <div style={{background:C.ink,borderBottom:`1px solid ${C.line}`,padding:'8px 12px'}}>
+          {navItems.map(([i,l,active],k)=>(
+            <div key={k} style={{display:'flex',alignItems:'center',gap:10,background:active?C.orange:'transparent',color:active?C.ink:C.muted,borderRadius:8,padding:'10px 12px',fontSize:13,fontWeight:600,marginBottom:3}}>
+              <span>{i}</span>{l}
+            </div>
           ))}
-        </div>
+        </div>}
 
-        {loading ? <p style={{color:C.muted}}>Loading…</p> :
-         shown.length===0 ? <div style={{background:C.panel,border:`1px solid ${C.line}`,borderRadius:14,padding:30,color:C.muted}}>No leads yet — click "+ Add Lead" to start.</div> :
-        <div style={{display:'grid',gridTemplateColumns:'290px 1fr',gap:18,alignItems:'start'}}>
-          {/* Work queue */}
-          <div style={{background:C.panel,border:`1px solid ${C.line}`,borderRadius:16,padding:14}}>
-            <div style={{color:C.muted,fontSize:11,textTransform:'uppercase',letterSpacing:1,padding:'4px 6px 10px'}}>Work Queue · best first</div>
-            {shown.map(l=>{
-              const s=scoreOf(l); const g=grade(s); const active=sel && l.id===sel.id
-              return (
-                <div key={l.id} onClick={()=>setSelId(l.id)} style={{background:active?C.panel2:'transparent',border:`1px solid ${active?C.orange:'transparent'}`,borderRadius:12,padding:13,marginBottom:7,cursor:'pointer'}}>
-                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                    <span style={{fontWeight:600,fontSize:14}}>{l.name}</span>
-                    <span style={{width:26,height:26,borderRadius:7,background:g.c+'22',color:g.c,border:`1px solid ${g.c}`,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:800,fontSize:13}}>{g.g}</span>
-                  </div>
-                  <div style={{color:C.muted,fontSize:11,marginTop:3}}>{l.city}, {l.state} · {l.lead_type}</div>
-                  <div style={{display:'flex',gap:6,marginTop:8,flexWrap:'wrap'}}>
-                    <Tag c={C.blue}>{freshLabel(l.freshness)}</Tag>
-                    {l.times_contacted===0? <Tag c={C.green}>Never called</Tag> : <Tag c={l.times_contacted<=1?C.amber:C.red}>{l.times_contacted}x called</Tag>}
-                    {l.skiptraced && <Tag c={C.green}>✓ traced</Tag>}
-                  </div>
-                </div>
-              )
-            })}
+        <div style={{padding:isMobile?'18px 16px':'26px 30px',width:'100%',maxWidth:1240,margin:'0 auto',boxSizing:'border-box'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12,marginBottom:16,flexWrap:'wrap'}}>
+            <div>
+              <h1 style={{fontFamily:'Georgia,serif',fontSize:isMobile?22:27,margin:0,fontWeight:600}}>Leads + Your VA</h1>
+              <p style={{color:C.muted,margin:'3px 0 0',fontSize:isMobile?12.5:13.5,maxWidth:640}}>Ranked by lead quality — freshness, contact history, motivation, equity & skip-trace.</p>
+            </div>
+            <button onClick={()=>setShowAdd(!showAdd)} style={{background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'11px 20px',fontWeight:800,cursor:'pointer',whiteSpace:'nowrap'}}>{showAdd?'Close':'+ Add Lead'}</button>
           </div>
 
-          {/* Detail + VA */}
-          {sel && <LeadDetail key={sel.id} lead={sel} onDelete={()=>remove(sel.id)}/>}
-        </div>}
+          {showAdd &&
+          <div style={{background:C.panel,border:`1px solid ${C.line}`,borderRadius:14,padding:20,marginBottom:18}}>
+            <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'repeat(3,1fr)',gap:10}}>
+              <In ph="Owner name" v={form.name} on={v=>set('name',v)}/>
+              <In ph="Phone" v={form.phone} on={v=>set('phone',v)}/>
+              <In ph="Address" v={form.address} on={v=>set('address',v)}/>
+              <In ph="City" v={form.city} on={v=>set('city',v)}/>
+              <Sel v={form.state} on={v=>set('state',v)} opts={['NJ','FL','DE','PA','Other']}/>
+              <Sel v={form.lead_type} on={v=>set('lead_type',v)} opts={['Lis Pendens','Pre-Foreclosure','Tax Delinquent','Vacant','Inherited','Divorce']}/>
+              <In ph="ARV ($)" v={form.arv} on={v=>set('arv',v)} type="number"/>
+              <In ph="Owed ($)" v={form.owed} on={v=>set('owed',v)} type="number"/>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'repeat(3,1fr)',gap:14,marginTop:14}}>
+              <Slider label={`Freshness: ${form.freshness}`} v={form.freshness} mn={0} mx={100} on={v=>set('freshness',v)}/>
+              <Slider label={`Motivation: ${form.motivation}`} v={form.motivation} mn={0} mx={100} on={v=>set('motivation',v)}/>
+              <Slider label={`Times called before: ${form.times_contacted}`} v={form.times_contacted} mn={0} mx={6} on={v=>set('times_contacted',v)}/>
+            </div>
+            <label style={{display:'flex',gap:8,alignItems:'center',marginTop:14,fontSize:13,color:C.muted}}>
+              <input type="checkbox" checked={form.skiptraced} onChange={e=>set('skiptraced',e.target.checked)}/> Skip-trace confirmed
+            </label>
+            <button onClick={add} style={{marginTop:16,background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'11px 22px',fontWeight:800,cursor:'pointer'}}>Save Lead</button>
+          </div>}
+
+          <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap'}}>
+            {['All','NJ','FL','DE','PA'].map(s=>(
+              <button key={s} onClick={()=>setFilter(s)} style={{border:`1px solid ${filter===s?C.orange:C.line}`,background:filter===s?C.orange:'transparent',color:filter===s?C.ink:C.muted,borderRadius:20,padding:'6px 14px',fontWeight:600,cursor:'pointer',fontSize:13}}>{s}</button>
+            ))}
+          </div>
+
+          {loading ? <p style={{color:C.muted}}>Loading…</p> :
+           shown.length===0 ? <div style={{background:C.panel,border:`1px solid ${C.line}`,borderRadius:14,padding:30,color:C.muted}}>No leads yet — tap "+ Add Lead" to start.</div> :
+          <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'280px 1fr',gap:16,alignItems:'start'}}>
+            <div style={{background:C.panel,border:`1px solid ${C.line}`,borderRadius:16,padding:14}}>
+              <div style={{color:C.muted,fontSize:11,textTransform:'uppercase',letterSpacing:1,padding:'4px 6px 10px'}}>Work Queue · best first</div>
+              <div style={{display:isMobile?'grid':'block',gridTemplateColumns:isMobile?'1fr 1fr':'none',gap:isMobile?8:0}}>
+                {shown.map(l=>{
+                  const s=scoreOf(l); const g=grade(s); const active=sel && l.id===sel.id
+                  return (
+                    <div key={l.id} onClick={()=>{ setSelId(l.id); if(isMobile){ window.scrollTo({top:0,behavior:'smooth'}) } }} style={{background:active?C.panel2:'transparent',border:`1px solid ${active?C.orange:'transparent'}`,borderRadius:12,padding:13,marginBottom:isMobile?0:7,cursor:'pointer'}}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
+                        <span style={{fontWeight:600,fontSize:14}}>{l.name}</span>
+                        <span style={{width:26,height:26,borderRadius:7,background:g.c+'22',color:g.c,border:`1px solid ${g.c}`,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:800,fontSize:13,flexShrink:0}}>{g.g}</span>
+                      </div>
+                      <div style={{color:C.muted,fontSize:11,marginTop:3}}>{l.city}, {l.state} · {l.lead_type}</div>
+                      <div style={{display:'flex',gap:6,marginTop:8,flexWrap:'wrap'}}>
+                        <Tag c={C.blue}>{freshLabel(l.freshness)}</Tag>
+                        {l.times_contacted===0? <Tag c={C.green}>Never called</Tag> : <Tag c={l.times_contacted<=1?C.amber:C.red}>{l.times_contacted}x called</Tag>}
+                        {l.skiptraced && <Tag c={C.green}>✓ traced</Tag>}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            {sel && <LeadDetail key={sel.id} lead={sel} onDelete={()=>remove(sel.id)} isMobile={isMobile}/>}
+          </div>}
+        </div>
       </div>
     </div>
   )
 }
 
-function LeadDetail({lead,onDelete}){
+function LeadDetail({lead,onDelete,isMobile}){
   const s=scoreOf(lead); const g=grade(s); const eq=eqOf(lead)
   const [msgs,setMsgs]=useState([
     {f:'va',t:'now',m:`Working ${lead.name.split(' ')[0]} now. ${lead.times_contacted===0?'Never contacted by another investor — fresh.':`Prior contact logged (${lead.times_contacted}x).`} I'll report back after calls.`}
@@ -169,24 +197,23 @@ function LeadDetail({lead,onDelete}){
   const send=()=>{ if(!draft.trim())return; setMsgs([...msgs,{f:'you',t:'now',m:draft.trim()}]); setDraft('') }
 
   return (
-    <div style={{display:'grid',gridTemplateColumns:'1fr 1.1fr',gap:16}}>
-      {/* Left: quality story */}
+    <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'1fr 1fr',gap:16}}>
       <div style={{display:'flex',flexDirection:'column',gap:16}}>
         <div style={{background:C.panel,border:`1px solid ${C.line}`,borderRadius:16,padding:22}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-            <div>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:16}}>
+            <div style={{minWidth:0}}>
               <div style={{fontSize:22,fontFamily:'Georgia,serif',fontWeight:600}}>{lead.name}</div>
-              <div style={{color:C.muted,fontSize:13,marginTop:3}}>{lead.address}, {lead.city} {lead.state}</div>
+              <div style={{color:C.muted,fontSize:13,marginTop:3}}>{lead.address}{lead.address?', ':''}{lead.city} {lead.state}</div>
               <div style={{color:C.muted,fontSize:13}}>{lead.lead_type} · {lead.phone||'no phone'}</div>
             </div>
-            <div style={{textAlign:'center',minWidth:92}}>
-              <div style={{width:92,height:92,borderRadius:'50%',background:`conic-gradient(${g.c} ${s*3.6}deg, ${C.ink} 0deg)`,display:'flex',alignItems:'center',justifyContent:'center'}}>
-                <div style={{width:72,height:72,borderRadius:'50%',background:C.panel,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}}>
-                  <div style={{color:g.c,fontSize:26,fontWeight:800,fontFamily:'Georgia,serif'}}>{g.g}</div>
+            <div style={{textAlign:'center',flexShrink:0}}>
+              <div style={{width:88,height:88,borderRadius:'50%',background:`conic-gradient(${g.c} ${s*3.6}deg, ${C.ink} 0deg)`,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                <div style={{width:68,height:68,borderRadius:'50%',background:C.panel,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}}>
+                  <div style={{color:g.c,fontSize:24,fontWeight:800,fontFamily:'Georgia,serif'}}>{g.g}</div>
                   <div style={{color:C.muted,fontSize:10}}>{s}/100</div>
                 </div>
               </div>
-              <div style={{color:g.c,fontSize:11,fontWeight:700,marginTop:6}}>{g.label}</div>
+              <div style={{color:g.c,fontSize:11,fontWeight:700,marginTop:6,whiteSpace:'nowrap'}}>{g.label}</div>
             </div>
           </div>
         </div>
@@ -205,20 +232,19 @@ function LeadDetail({lead,onDelete}){
         </div>
       </div>
 
-      {/* Right: VA chat */}
-      <div style={{background:C.panel,border:`1px solid ${C.line}`,borderRadius:16,padding:22,display:'flex',flexDirection:'column',minHeight:420}}>
+      <div style={{background:C.panel,border:`1px solid ${C.line}`,borderRadius:16,padding:22,display:'flex',flexDirection:'column',minHeight:isMobile?360:420}}>
         <div style={{display:'flex',alignItems:'center',gap:10,paddingBottom:14,borderBottom:`1px solid ${C.line}`,marginBottom:14}}>
-          <div style={{width:38,height:38,borderRadius:'50%',background:`linear-gradient(135deg,${C.orange},${C.orangeSoft})`,display:'flex',alignItems:'center',justifyContent:'center',color:C.ink,fontWeight:800}}>S</div>
-          <div style={{flex:1}}>
+          <div style={{width:38,height:38,borderRadius:'50%',background:`linear-gradient(135deg,${C.orange},${C.orangeSoft})`,display:'flex',alignItems:'center',justifyContent:'center',color:C.ink,fontWeight:800,flexShrink:0}}>S</div>
+          <div style={{flex:1,minWidth:0}}>
             <div style={{fontWeight:700,fontSize:14}}>Sofia · Your VA</div>
             <div style={{display:'flex',alignItems:'center',gap:5}}>
               <span style={{width:6,height:6,borderRadius:6,background:C.green}}/>
               <span style={{color:C.green,fontSize:11}}>working this lead now</span>
             </div>
           </div>
-          <span style={{color:C.muted,fontSize:11}}>on {lead.name.split(' ')[0]}</span>
+          <span style={{color:C.muted,fontSize:11,whiteSpace:'nowrap'}}>on {lead.name.split(' ')[0]}</span>
         </div>
-        <div style={{flex:1,overflowY:'auto',paddingRight:4}}>
+        <div style={{flex:1,overflowY:'auto',paddingRight:4,minHeight:120}}>
           {msgs.map((m,i)=>(
             <div key={i} style={{display:'flex',justifyContent:m.f==='you'?'flex-end':'flex-start',marginBottom:10}}>
               <div style={{maxWidth:'82%',background:m.f==='you'?C.orange:C.panel2,color:m.f==='you'?C.ink:C.cream,border:m.f==='you'?'none':`1px solid ${C.line}`,padding:'11px 14px',borderRadius:14,fontSize:13,lineHeight:1.45}}>
@@ -228,7 +254,7 @@ function LeadDetail({lead,onDelete}){
           ))}
         </div>
         <div style={{display:'flex',gap:8,marginTop:12}}>
-          <input value={draft} onChange={e=>setDraft(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} placeholder={`Message Sofia about ${lead.name.split(' ')[0]}…`} style={{flex:1,background:C.ink,border:`1px solid ${C.line}`,borderRadius:10,padding:'11px 14px',color:C.cream,fontSize:13,outline:'none'}}/>
+          <input value={draft} onChange={e=>setDraft(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} placeholder="Message Sofia…" style={{flex:1,minWidth:0,background:C.ink,border:`1px solid ${C.line}`,borderRadius:10,padding:'11px 14px',color:C.cream,fontSize:13,outline:'none'}}/>
           <button onClick={send} style={{background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'0 20px',fontWeight:800,cursor:'pointer'}}>Send</button>
         </div>
         <div style={{color:C.muted,fontSize:10,marginTop:8,textAlign:'center'}}>Preview — live VA messaging connects in the next build.</div>
@@ -240,9 +266,9 @@ function LeadDetail({lead,onDelete}){
 function Signal({label,value,display,color}){
   return (
     <div style={{marginBottom:12}}>
-      <div style={{display:'flex',justifyContent:'space-between',marginBottom:5}}>
+      <div style={{display:'flex',justifyContent:'space-between',marginBottom:5,gap:8}}>
         <span style={{color:C.muted,fontSize:12}}>{label}</span>
-        <span style={{fontSize:12,fontWeight:600}}>{display}</span>
+        <span style={{fontSize:12,fontWeight:600,textAlign:'right'}}>{display}</span>
       </div>
       <div style={{height:6,background:C.ink,borderRadius:6,overflow:'hidden'}}>
         <div style={{width:`${value}%`,height:'100%',background:color,borderRadius:6,transition:'width .4s'}}/>
@@ -251,6 +277,6 @@ function Signal({label,value,display,color}){
   )
 }
 function Tag({children,c}){return <span style={{background:c+'1e',color:c,border:`1px solid ${c}55`,borderRadius:6,padding:'2px 7px',fontSize:10,fontWeight:700}}>{children}</span>}
-function In({ph,v,on,type='text'}){return <input type={type} placeholder={ph} value={v} onChange={e=>on(e.target.value)} style={{background:C.ink,border:`1px solid ${C.line}`,borderRadius:8,padding:'10px 12px',color:C.cream,fontSize:13,outline:'none'}}/>}
-function Sel({v,on,opts}){return <select value={v} onChange={e=>on(e.target.value)} style={{background:C.ink,border:`1px solid ${C.line}`,borderRadius:8,padding:'10px 12px',color:C.cream,fontSize:13}}>{opts.map(o=><option key={o}>{o}</option>)}</select>}
+function In({ph,v,on,type='text'}){return <input type={type} placeholder={ph} value={v} onChange={e=>on(e.target.value)} style={{background:C.ink,border:`1px solid ${C.line}`,borderRadius:8,padding:'10px 12px',color:C.cream,fontSize:13,outline:'none',width:'100%',boxSizing:'border-box'}}/>}
+function Sel({v,on,opts}){return <select value={v} onChange={e=>on(e.target.value)} style={{background:C.ink,border:`1px solid ${C.line}`,borderRadius:8,padding:'10px 12px',color:C.cream,fontSize:13,width:'100%',boxSizing:'border-box'}}>{opts.map(o=><option key={o}>{o}</option>)}</select>}
 function Slider({label,v,mn,mx,on}){return <div><label style={{fontSize:12,color:C.muted}}>{label}</label><input type="range" min={mn} max={mx} value={v} onChange={e=>on(+e.target.value)} style={{width:'100%',accentColor:C.orange}}/></div>}
