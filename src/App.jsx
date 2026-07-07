@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
 import AcademyPage from './AcademyPage'
+import CommandCenter from './CommandCenter'
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -104,7 +105,7 @@ export default function App(){
           {page==='leads' && <LeadsPage leads={leads} loading={loading} reload={load} isMobile={isMobile}/>}
           {page==='comping' && <CompingPage leads={leads} isMobile={isMobile}/>}
           {page==='academy' && <AcademyPage isMobile={isMobile}/>}
-          {page==='command' && <Placeholder title="Command Center" desc="Your at-a-glance dashboard - hot leads, VA activity, pipeline value and revenue. Building next."/>}
+          {page==='command' && <CommandCenter leads={leads} isMobile={isMobile} goTo={go}/>}
           {page==='pipeline' && <Placeholder title="Pipeline" desc="Your leads as a drag-and-drop deal board: New Lead to Contact Made to Under Contract to Closing. Coming soon."/>}
         </div>
       </div>
