@@ -101,7 +101,7 @@ export default function App(){
           ))}
         </div>}
 
-        <div style={{padding:isMobile?'18px 16px':'26px 30px',width:'100%',maxWidth:1240,margin:'0 auto',boxSizing:'border-box'}}>
+        <div style={{padding:isMobile?'18px 16px':'26px 30px',width:'100%',maxWidth:1240,margin:0,boxSizing:'border-box'}}>
           {page==='leads' && <LeadsPage leads={leads} loading={loading} reload={load} isMobile={isMobile}/>}
           {page==='comping' && <CompingPage leads={leads} isMobile={isMobile}/>}
           {page==='academy' && <AcademyPage isMobile={isMobile}/>}
