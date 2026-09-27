@@ -42,8 +42,6 @@ const BLANK = { name:'', address:'', city:'', state:'NJ', lead_type:'Lis Pendens
 function friendlyErr(msg){
   const m = String(msg||'')
   if(/failed to fetch|network|fetch/i.test(m)) return "Can't reach the database right now. It may still be waking up — give it a minute, then hit Retry."
-  if(/invalid login credentials/i.test(m)) return "Email or password didn't match. Try again."
-  if(/row-level security|permission denied|violates/i.test(m)) return "You don't have permission for that. Make sure you're signed in."
   return m
 }
 
@@ -62,16 +60,8 @@ export default function App(){
   const [leads,setLeads] = useState([])
   const [loading,setLoading] = useState(true)
   const [err,setErr] = useState('')
-  const [session,setSession] = useState(null)
-  const [authReady,setAuthReady] = useState(false)
 
-  useEffect(()=>{
-    supabase.auth.getSession().then(({data})=>{ setSession(data.session); setAuthReady(true) })
-    const { data:sub } = supabase.auth.onAuthStateChange((_e,s)=>setSession(s))
-    return ()=>sub.subscription.unsubscribe()
-  },[])
-
-  useEffect(()=>{ if(session) load() },[session])
+  useEffect(()=>{ load() },[])
   async function load(){
     setLoading(true)
     try{
@@ -81,12 +71,7 @@ export default function App(){
     }catch(e){ setErr(friendlyErr(e.message)) }
     setLoading(false)
   }
-  async function signOut(){ await supabase.auth.signOut(); setLeads([]) }
-
   const go = (p)=>{ setPage(p); setMenuOpen(false) }
-
-  if(!authReady) return <div style={{minHeight:'100vh',background:C.navy,display:'flex',alignItems:'center',justifyContent:'center',color:C.muted,fontFamily:'Helvetica Neue,Arial'}}>Loading...</div>
-  if(!session) return <Login/>
 
   return (
     <div style={{display:'flex',minHeight:'100vh',background:C.navy,fontFamily:'Helvetica Neue,Arial',color:C.cream}}>
@@ -107,7 +92,6 @@ export default function App(){
           <div style={{fontSize:12,marginTop:5}}>124 dials, 19 contacts</div>
           <div style={{color:C.green,fontSize:12}}>4 appointments set</div>
         </div>
-        <button onClick={signOut} style={{marginTop:10,background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'8px',fontSize:12,cursor:'pointer',width:'100%'}}>Sign out</button>
       </div>}
 
       <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column'}}>
@@ -123,7 +107,6 @@ export default function App(){
               <span style={{fontWeight:800,width:16}}>{i}</span>{l}
             </div>
           ))}
-          <div onClick={signOut} style={{color:C.muted,borderRadius:8,padding:'10px 12px',fontSize:13,fontWeight:600,cursor:'pointer'}}>Sign out</div>
         </div>}
 
         <div style={{padding:isMobile?'18px 16px':'26px 30px',width:'100%',maxWidth:1240,margin:0,boxSizing:'border-box'}}>
@@ -134,41 +117,6 @@ export default function App(){
           {page==='command' && <CommandCenter leads={leads} isMobile={isMobile} goTo={go}/>}
           {page==='pipeline' && <Placeholder title="Pipeline" desc="Your leads as a drag-and-drop deal board: New Lead to Contact Made to Under Contract to Closing. Coming soon."/>}
         </div>
-      </div>
-    </div>
-  )
-}
-
-function Login(){
-  const [email,setEmail] = useState('')
-  const [pw,setPw] = useState('')
-  const [busy,setBusy] = useState(false)
-  const [err,setErr] = useState('')
-
-  async function signIn(){
-    if(!email.trim() || !pw){ setErr('Enter your email and password.'); return }
-    setBusy(true); setErr('')
-    try{
-      const { error } = await supabase.auth.signInWithPassword({ email:email.trim(), password:pw })
-      if(error) throw error
-    }catch(e){ setErr(friendlyErr(e.message)) }
-    setBusy(false)
-  }
-
-  return (
-    <div style={{minHeight:'100vh',background:C.navy,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'Helvetica Neue,Arial',padding:20}}>
-      <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:18,padding:'34px 30px',width:'100%',maxWidth:380,boxSizing:'border-box'}}>
-        <div style={{textAlign:'center',marginBottom:24}}>
-          <div style={{fontFamily:'Georgia,serif',fontSize:26,fontWeight:800,color:C.cream}}>WHOLESALE<span style={{color:C.orange}}>OS</span></div>
-          <div style={{color:C.muted,fontSize:9,letterSpacing:2,textTransform:'uppercase',marginTop:4}}>by Icole Agency</div>
-        </div>
-        <div style={{color:C.muted,fontSize:12,marginBottom:6}}>Email</div>
-        <input value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==='Enter'&&signIn()} type="email" placeholder="you@icoleagency.com" style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'11px 13px',color:C.cream,fontSize:14,outline:'none',width:'100%',boxSizing:'border-box',marginBottom:14}}/>
-        <div style={{color:C.muted,fontSize:12,marginBottom:6}}>Password</div>
-        <input value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==='Enter'&&signIn()} type="password" placeholder="••••••••" style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'11px 13px',color:C.cream,fontSize:14,outline:'none',width:'100%',boxSizing:'border-box'}}/>
-        {err && <div style={{background:C.red+'1e',border:'1px solid '+C.red+'55',color:C.red,borderRadius:8,padding:'10px 12px',fontSize:12.5,marginTop:14,lineHeight:1.45}}>{err}</div>}
-        <button onClick={signIn} disabled={busy} style={{marginTop:18,width:'100%',background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'13px',fontWeight:800,fontSize:14,cursor:busy?'default':'pointer',opacity:busy?0.7:1}}>{busy?'Signing in...':'Sign In'}</button>
-        <div style={{color:C.muted,fontSize:11,marginTop:16,textAlign:'center',lineHeight:1.5}}>Team accounts are created by your admin.<br/>No public sign-ups.</div>
       </div>
     </div>
   )
