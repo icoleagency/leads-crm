@@ -3,7 +3,8 @@ import { supabase } from './supabaseClient'
 import AcademyPage from './AcademyPage'
 import CommandCenter from './CommandCenter'
 import KpiPage from './KpiPage'
-import { REPAIRS, BLANK_DETAILS, detailsOf, money, compResult } from './leadModel'
+import { REPAIRS, BLANK_DETAILS, detailsOf, money, compResult, stageOf, stageIdx, STAGE, OUTCOME_STAGE, moveStage, patchLead } from './leadModel'
+import Pipeline from './Pipeline'
 import DealAnalyzer from './DealAnalyzer'
 import { OUTCOMES, OUTCOME, fetchActivity, logActivity, activityErr, tally, inLastDays, getCaller, saveCaller } from './activity'
 
@@ -69,10 +70,12 @@ export default function App(){
   const [activity,setActivity] = useState([])
   const [actErr,setActErr] = useState('')
   const [analyzeId,setAnalyzeId] = useState('')
+  const [focusId,setFocusId] = useState('')
+  const reloadQuiet = ()=>load(true)
 
   useEffect(()=>{ load(); loadActivity() },[])
-  async function load(){
-    setLoading(true)
+  async function load(silent){
+    if(silent!==true) setLoading(true)
     try{
       const { data, error } = await supabase.from('leads').select('*')
       if(error) throw error
@@ -85,6 +88,7 @@ export default function App(){
     catch(e){ setActErr(activityErr(e.message)) }
   }
   const go = (p)=>{ if(p==='comping') setAnalyzeId(''); setPage(p); setMenuOpen(false) }
+  const openLead = (id)=>{ setFocusId(String(id)); setPage('leads'); window.scrollTo({top:0}) }
   const analyzeLead = (id)=>{ setAnalyzeId(String(id)); setPage('comping'); window.scrollTo({top:0}) }
   const today = tally(inLastDays(activity,1))
 
@@ -126,12 +130,12 @@ export default function App(){
 
         <div style={{padding:isMobile?'18px 16px':'26px 30px',width:'100%',maxWidth:1240,margin:0,boxSizing:'border-box'}}>
           {err && <ErrorBanner msg={err} onRetry={load} onClose={()=>setErr('')}/>}
-          {page==='leads' && <LeadsPage leads={leads} loading={loading} reload={load} loadErr={err} activity={activity} reloadActivity={loadActivity} onAnalyze={analyzeLead} isMobile={isMobile}/>}
+          {page==='leads' && <LeadsPage key={focusId||'all'} initialSel={focusId} leads={leads} loading={loading} reload={load} reloadQuiet={reloadQuiet} loadErr={err} activity={activity} reloadActivity={loadActivity} onAnalyze={analyzeLead} isMobile={isMobile}/>}
           {page==='comping' && <DealAnalyzer key={analyzeId||'blank'} leads={leads} initialLeadId={analyzeId} reload={load} isMobile={isMobile}/>}
           {page==='academy' && <AcademyPage isMobile={isMobile}/>}
           {page==='command' && <CommandCenter leads={leads} activity={activity} isMobile={isMobile} goTo={go}/>}
           {page==='kpis' && <KpiPage activity={activity} actErr={actErr} reload={loadActivity} isMobile={isMobile} goTo={go}/>}
-          {page==='pipeline' && <Placeholder title="Pipeline" desc="Your leads as a drag-and-drop deal board: New Lead to Contact Made to Under Contract to Closing. Coming soon."/>}
+          {page==='pipeline' && <Pipeline leads={leads} activity={activity} reload={reloadQuiet} openLead={openLead} analyze={analyzeLead} isMobile={isMobile}/>}
         </div>
       </div>
     </div>
@@ -150,21 +154,8 @@ function ErrorBanner({msg,onRetry,onClose}){
   )
 }
 
-function Placeholder({title,desc}){
-  return (
-    <div>
-      <h1 style={{fontFamily:'Georgia,serif',fontSize:27,margin:0,fontWeight:600}}>{title}</h1>
-      <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:40,marginTop:20,textAlign:'center'}}>
-        <div style={{fontSize:40,marginBottom:12}}>[ ]</div>
-        <div style={{color:C.cream,fontSize:16,fontWeight:600,marginBottom:8}}>Coming soon</div>
-        <p style={{color:C.muted,fontSize:14,maxWidth:460,margin:'0 auto',lineHeight:1.5}}>{desc}</p>
-      </div>
-    </div>
-  )
-}
-
-function LeadsPage({leads,loading,reload,loadErr,activity,reloadActivity,onAnalyze,isMobile}){
-  const [selId,setSelId] = useState(null)
+function LeadsPage({leads,loading,reload,reloadQuiet,loadErr,activity,reloadActivity,onAnalyze,initialSel,isMobile}){
+  const [selId,setSelId] = useState(()=>{ const l=leads.find(x=>String(x.id)===String(initialSel)); return l?l.id:null })
   const [showAdd,setShowAdd] = useState(false)
   const [form,setForm] = useState(BLANK)
   const [filter,setFilter] = useState('All')
@@ -307,6 +298,7 @@ function LeadsPage({leads,loading,reload,loadErr,activity,reloadActivity,onAnaly
                   </div>
                   <div style={{color:C.muted,fontSize:11,marginTop:3}}>{l.city}, {l.state} - {l.lead_type}</div>
                   <div style={{display:'flex',gap:6,marginTop:8,flexWrap:'wrap'}}>
+                    {(()=>{ const st=stageOf(l,activity); return st!=='new' ? <Tag c={STAGE[st].c}>{STAGE[st].l}</Tag> : null })()}
                     <Tag c={C.blue}>{freshLabel(l.freshness)}</Tag>
                     {l.times_contacted===0? <Tag c={C.green}>Never called</Tag> : <Tag c={l.times_contacted<=1?C.amber:C.red}>{l.times_contacted}x called</Tag>}
                     {l.skiptraced && <Tag c={C.green}>traced</Tag>}
@@ -316,13 +308,13 @@ function LeadsPage({leads,loading,reload,loadErr,activity,reloadActivity,onAnaly
             })}
           </div>
         </div>
-        {sel && <LeadDetail key={sel.id} lead={sel} onDelete={()=>remove(sel.id)} onEdit={()=>openEdit(sel)} activity={activity} reloadActivity={reloadActivity} onAnalyze={()=>onAnalyze(sel.id)} isMobile={isMobile}/>}
+        {sel && <LeadDetail key={sel.id} lead={sel} onDelete={()=>remove(sel.id)} onEdit={()=>openEdit(sel)} activity={activity} reloadActivity={reloadActivity} reloadLeads={reloadQuiet} onAnalyze={()=>onAnalyze(sel.id)} isMobile={isMobile}/>}
       </div>}
     </div>
   )
 }
 
-function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,onAnalyze,isMobile}){
+function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,reloadLeads,onAnalyze,isMobile}){
   const s=scoreOf(lead); const g=grade(s); const eq=eqOf(lead)
   const [msgs,setMsgs]=useState([
     {f:'va',t:'now',m:'Working '+lead.name.split(' ')[0]+' now. '+(lead.times_contacted===0?'Never contacted by another investor - fresh.':'Prior contact logged ('+lead.times_contacted+'x).')+' I will report back after calls.'}
@@ -373,7 +365,7 @@ function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,onAnalyze,isMo
 
       <div style={{display:'flex',flexDirection:'column',gap:16}}>
         <ScriptPanel lead={lead}/>
-        <LogCall lead={lead} activity={activity} reloadActivity={reloadActivity}/>
+        <LogCall lead={lead} activity={activity} reloadActivity={reloadActivity} reloadLeads={reloadLeads}/>
         <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:22,display:'flex',flexDirection:'column',minHeight:isMobile?360:420}}>
         <div style={{display:'flex',alignItems:'center',gap:10,paddingBottom:14,borderBottom:'1px solid '+C.line,marginBottom:14}}>
           <div style={{width:38,height:38,borderRadius:'50%',background:'linear-gradient(135deg,'+C.orange+','+C.orangeSoft+')',display:'flex',alignItems:'center',justifyContent:'center',color:C.ink,fontWeight:800,flexShrink:0}}>S</div>
@@ -589,7 +581,7 @@ function ScriptPanel({lead}){
   )
 }
 
-function LogCall({lead,activity,reloadActivity}){
+function LogCall({lead,activity,reloadActivity,reloadLeads}){
   const [caller,setCaller] = useState(getCaller())
   const [note,setNote] = useState('')
   const [pending,setPending] = useState(null)
@@ -605,7 +597,19 @@ function LogCall({lead,activity,reloadActivity}){
     try{
       await logActivity(lead, outcome, {amount, note, caller})
       saveCaller(caller)
-      setMsg({ok:true,t:'Logged: '+o.label}); setNote(''); setPending(null); setAmount('')
+      let moved = ''
+      try{
+        const cur = stageOf(lead, activity), target = OUTCOME_STAGE[outcome]
+        const extra = {}
+        const prevDeal = (lead.details && lead.details.deal) || {}
+        if(outcome==='closed' && Number(amount)) extra.deal = {...prevDeal, fee:Number(amount), closing_date:prevDeal.closing_date||new Date().toISOString().slice(0,10)}
+        if(outcome==='offer' && Number(amount)) extra.deal = {...prevDeal, last_offer:Number(amount)}
+        const forward = target && (target==='dead' ? cur!=='dead' : stageIdx(target)>stageIdx(cur))
+        if(forward){ await moveStage(lead, target, extra); moved = ' · moved to '+STAGE[target].l+' in Pipeline' }
+        else if(extra.deal){ await patchLead(lead, extra) }
+        if((forward || extra.deal) && reloadLeads) reloadLeads()
+      }catch{ moved = ' · (pipeline stage not updated — try moving it on the Pipeline page)' }
+      setMsg({ok:true,t:'Logged: '+o.label+moved}); setNote(''); setPending(null); setAmount('')
       reloadActivity()
     }catch(e){ setMsg({ok:false,t:activityErr(e.message)}) }
     setBusy(false)
