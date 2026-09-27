@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
+import { tally, inLastDays } from './activity'
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -22,8 +23,9 @@ const money = n => '$'+Number(n||0).toLocaleString()
 const ACADEMY_TOTAL = 20
 const ASSIGN_FEE = 15000
 
-export default function CommandCenter({leads,isMobile,goTo}){
+export default function CommandCenter({leads,activity=[],isMobile,goTo}){
   const [academyPct,setAcademyPct] = useState(0)
+  const today = tally(inLastDays(activity,1))
 
   useEffect(()=>{ loadAcademy() },[])
   async function loadAcademy(){
@@ -89,13 +91,14 @@ export default function CommandCenter({leads,isMobile,goTo}){
 
         <div style={{display:'flex',flexDirection:'column',gap:16}}>
           <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:20}}>
-            <div style={{fontWeight:700,fontSize:14,marginBottom:12}}>Your VA Today</div>
+            <div style={{fontWeight:700,fontSize:14,marginBottom:12}}>Team Today</div>
             <div style={{display:'flex',flexDirection:'column',gap:8}}>
-              <VaStat label="Dials made" val="124"/>
-              <VaStat label="Contacts reached" val="19"/>
-              <VaStat label="Appointments set" val="4" green/>
+              <VaStat label="Dials made" val={today.dials}/>
+              <VaStat label="Contacts reached" val={today.contacts}/>
+              <VaStat label="Appointments set" val={today.appointment} green/>
+              <VaStat label="Offers made" val={today.offer} green/>
             </div>
-            <div style={{color:C.muted,fontSize:10,marginTop:12,textAlign:'center'}}>Live VA activity connects in the next build.</div>
+            <button onClick={()=>goTo('kpis')} style={{marginTop:14,width:'100%',background:'transparent',border:'1px solid '+C.orange,color:C.orange,borderRadius:8,padding:'9px',fontSize:12,fontWeight:700,cursor:'pointer'}}>Open KPIs</button>
           </div>
 
           <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:20}}>

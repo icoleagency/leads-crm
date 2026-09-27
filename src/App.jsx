@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
 import AcademyPage from './AcademyPage'
 import CommandCenter from './CommandCenter'
+import KpiPage from './KpiPage'
+import { OUTCOMES, OUTCOME, fetchActivity, logActivity, activityErr, tally, inLastDays, getCaller, saveCaller } from './activity'
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -71,6 +73,7 @@ function friendlyErr(msg){
 const NAV = [
   ['leads','L','Leads + VA'],
   ['command','H','Command Center'],
+  ['kpis','K','KPIs'],
   ['pipeline','P','Pipeline'],
   ['comping','C','Comping'],
   ['academy','A','Academy'],
@@ -83,8 +86,10 @@ export default function App(){
   const [leads,setLeads] = useState([])
   const [loading,setLoading] = useState(true)
   const [err,setErr] = useState('')
+  const [activity,setActivity] = useState([])
+  const [actErr,setActErr] = useState('')
 
-  useEffect(()=>{ load() },[])
+  useEffect(()=>{ load(); loadActivity() },[])
   async function load(){
     setLoading(true)
     try{
@@ -94,7 +99,12 @@ export default function App(){
     }catch(e){ setErr(friendlyErr(e.message)) }
     setLoading(false)
   }
+  async function loadActivity(){
+    try{ setActivity(await fetchActivity(90)); setActErr('') }
+    catch(e){ setActErr(activityErr(e.message)) }
+  }
   const go = (p)=>{ setPage(p); setMenuOpen(false) }
+  const today = tally(inLastDays(activity,1))
 
   return (
     <div style={{display:'flex',minHeight:'100vh',background:C.navy,fontFamily:'Helvetica Neue,Arial',color:C.cream}}>
@@ -110,10 +120,10 @@ export default function App(){
           </div>
         ))}
         <div style={{flex:1}}/>
-        <div style={{background:C.panel,borderRadius:12,padding:13}}>
-          <div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>Your VA today</div>
-          <div style={{fontSize:12,marginTop:5}}>124 dials, 19 contacts</div>
-          <div style={{color:C.green,fontSize:12}}>4 appointments set</div>
+        <div onClick={()=>go('kpis')} style={{background:C.panel,borderRadius:12,padding:13,cursor:'pointer'}}>
+          <div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>Team today</div>
+          <div style={{fontSize:12,marginTop:5}}>{today.dials} dials, {today.contacts} contacts</div>
+          <div style={{color:C.green,fontSize:12}}>{today.appointment} appts · {today.offer} offers</div>
         </div>
       </div>}
 
@@ -134,10 +144,11 @@ export default function App(){
 
         <div style={{padding:isMobile?'18px 16px':'26px 30px',width:'100%',maxWidth:1240,margin:0,boxSizing:'border-box'}}>
           {err && <ErrorBanner msg={err} onRetry={load} onClose={()=>setErr('')}/>}
-          {page==='leads' && <LeadsPage leads={leads} loading={loading} reload={load} loadErr={err} isMobile={isMobile}/>}
+          {page==='leads' && <LeadsPage leads={leads} loading={loading} reload={load} loadErr={err} activity={activity} reloadActivity={loadActivity} isMobile={isMobile}/>}
           {page==='comping' && <CompingPage leads={leads} isMobile={isMobile}/>}
           {page==='academy' && <AcademyPage isMobile={isMobile}/>}
-          {page==='command' && <CommandCenter leads={leads} isMobile={isMobile} goTo={go}/>}
+          {page==='command' && <CommandCenter leads={leads} activity={activity} isMobile={isMobile} goTo={go}/>}
+          {page==='kpis' && <KpiPage activity={activity} actErr={actErr} reload={loadActivity} isMobile={isMobile} goTo={go}/>}
           {page==='pipeline' && <Placeholder title="Pipeline" desc="Your leads as a drag-and-drop deal board: New Lead to Contact Made to Under Contract to Closing. Coming soon."/>}
         </div>
       </div>
@@ -170,7 +181,7 @@ function Placeholder({title,desc}){
   )
 }
 
-function LeadsPage({leads,loading,reload,loadErr,isMobile}){
+function LeadsPage({leads,loading,reload,loadErr,activity,reloadActivity,isMobile}){
   const [selId,setSelId] = useState(null)
   const [showAdd,setShowAdd] = useState(false)
   const [form,setForm] = useState(BLANK)
@@ -323,13 +334,13 @@ function LeadsPage({leads,loading,reload,loadErr,isMobile}){
             })}
           </div>
         </div>
-        {sel && <LeadDetail key={sel.id} lead={sel} onDelete={()=>remove(sel.id)} onEdit={()=>openEdit(sel)} isMobile={isMobile}/>}
+        {sel && <LeadDetail key={sel.id} lead={sel} onDelete={()=>remove(sel.id)} onEdit={()=>openEdit(sel)} activity={activity} reloadActivity={reloadActivity} isMobile={isMobile}/>}
       </div>}
     </div>
   )
 }
 
-function LeadDetail({lead,onDelete,onEdit,isMobile}){
+function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,isMobile}){
   const s=scoreOf(lead); const g=grade(s); const eq=eqOf(lead)
   const [msgs,setMsgs]=useState([
     {f:'va',t:'now',m:'Working '+lead.name.split(' ')[0]+' now. '+(lead.times_contacted===0?'Never contacted by another investor - fresh.':'Prior contact logged ('+lead.times_contacted+'x).')+' I will report back after calls.'}
@@ -380,6 +391,7 @@ function LeadDetail({lead,onDelete,onEdit,isMobile}){
 
       <div style={{display:'flex',flexDirection:'column',gap:16}}>
         <ScriptPanel lead={lead}/>
+        <LogCall lead={lead} activity={activity} reloadActivity={reloadActivity}/>
         <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:22,display:'flex',flexDirection:'column',minHeight:isMobile?360:420}}>
         <div style={{display:'flex',alignItems:'center',gap:10,paddingBottom:14,borderBottom:'1px solid '+C.line,marginBottom:14}}>
           <div style={{width:38,height:38,borderRadius:'50%',background:'linear-gradient(135deg,'+C.orange+','+C.orangeSoft+')',display:'flex',alignItems:'center',justifyContent:'center',color:C.ink,fontWeight:800,flexShrink:0}}>S</div>
@@ -579,6 +591,64 @@ function ScriptPanel({lead}){
         {activeObj &&
         <div style={{background:C.amber+'14',border:'1px solid '+C.amber+'55',borderRadius:10,padding:'12px 14px',marginTop:10,fontSize:13.5,lineHeight:1.55,color:C.cream}}>{activeObj[2]}</div>}
       </div>
+    </div>
+  )
+}
+
+function LogCall({lead,activity,reloadActivity}){
+  const [caller,setCaller] = useState(getCaller())
+  const [note,setNote] = useState('')
+  const [pending,setPending] = useState(null)
+  const [amount,setAmount] = useState('')
+  const [busy,setBusy] = useState(false)
+  const [msg,setMsg] = useState(null)
+  const history = activity.filter(a=>a.lead_id===String(lead.id)).slice(0,6)
+
+  async function submit(outcome){
+    const o = OUTCOME[outcome]
+    if(o.amount && pending!==outcome){ setPending(outcome); setAmount(''); return }
+    setBusy(true); setMsg(null)
+    try{
+      await logActivity(lead, outcome, {amount, note, caller})
+      saveCaller(caller)
+      setMsg({ok:true,t:'Logged: '+o.label}); setNote(''); setPending(null); setAmount('')
+      reloadActivity()
+    }catch(e){ setMsg({ok:false,t:activityErr(e.message)}) }
+    setBusy(false)
+  }
+  const when = iso => { const d=new Date(iso); const t=d.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}); return d.toDateString()===new Date().toDateString() ? 'Today '+t : d.toLocaleDateString([], {month:'short',day:'numeric'})+' '+t }
+
+  return (
+    <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:22}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
+        <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:1}}>Log this call</div>
+        <label style={{display:'flex',alignItems:'center',gap:6,color:C.muted,fontSize:11}}>Caller
+          <input value={caller} onChange={e=>setCaller(e.target.value)} onBlur={()=>saveCaller(caller)} placeholder="your name" style={{background:C.ink,border:'1px solid '+C.line,borderRadius:6,padding:'5px 8px',color:C.cream,fontSize:12,outline:'none',width:110}}/>
+        </label>
+      </div>
+      <input value={note} onChange={e=>setNote(e.target.value)} placeholder="Quick note (optional) — e.g. call back Tue after 5" style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'9px 12px',color:C.cream,fontSize:13,outline:'none',width:'100%',boxSizing:'border-box',marginBottom:10}}/>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+        {OUTCOMES.map(o=>(
+          <button key={o.key} disabled={busy} onClick={()=>submit(o.key)} style={{background:pending===o.key?C.orange:C.ink,color:pending===o.key?C.ink:(o.key==='dead'?C.muted:C.cream),border:'1px solid '+(pending===o.key?C.orange:C.line),borderRadius:8,padding:'8px 11px',fontSize:12,fontWeight:600,cursor:busy?'default':'pointer'}}>{o.label}</button>
+        ))}
+      </div>
+      {pending &&
+      <div style={{display:'flex',gap:8,marginTop:10}}>
+        <input autoFocus type="number" value={amount} onChange={e=>setAmount(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit(pending)} placeholder={OUTCOME[pending].amount+' ($)'} style={{flex:1,minWidth:0,background:C.ink,border:'1px solid '+C.orange,borderRadius:8,padding:'9px 12px',color:C.cream,fontSize:13,outline:'none'}}/>
+        <button onClick={()=>submit(pending)} disabled={busy} style={{background:C.orange,color:C.ink,border:'none',borderRadius:8,padding:'0 16px',fontWeight:800,fontSize:12,cursor:'pointer'}}>Save</button>
+        <button onClick={()=>setPending(null)} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'0 12px',fontSize:12,cursor:'pointer'}}>Cancel</button>
+      </div>}
+      {msg && <div style={{marginTop:10,fontSize:12.5,lineHeight:1.45,color:msg.ok?C.green:C.red,background:(msg.ok?C.green:C.red)+'14',border:'1px solid '+(msg.ok?C.green:C.red)+'44',borderRadius:8,padding:'8px 11px'}}>{msg.t}</div>}
+      {history.length>0 &&
+      <div style={{borderTop:'1px solid '+C.line,marginTop:14,paddingTop:10}}>
+        <div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>Call history</div>
+        {history.map(a=>(
+          <div key={a.id} style={{display:'flex',justifyContent:'space-between',gap:10,fontSize:12,padding:'4px 0',borderBottom:'1px solid '+C.line+'88'}}>
+            <span style={{color:C.cream}}>{OUTCOME[a.outcome]?.short||a.outcome}{a.amount?' · '+money(a.amount):''}{a.note?<span style={{color:C.muted}}> — {a.note}</span>:null}</span>
+            <span style={{color:C.muted,whiteSpace:'nowrap'}}>{when(a.created_at)} · {a.caller}</span>
+          </div>
+        ))}
+      </div>}
     </div>
   )
 }
