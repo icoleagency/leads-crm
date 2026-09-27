@@ -36,12 +36,35 @@ function grade(s){
 const money = n => '$'+Number(n||0).toLocaleString()
 function freshLabel(f){ if(f>=90) return 'New · fresh'; if(f>=60) return 'Recent'; if(f>=30) return 'Aging'; return 'Stale' }
 
+const REPAIRS = [
+  ['roof','Roof',8000,15000],
+  ['hvac','HVAC / furnace',5000,10000],
+  ['water_heater','Hot water tank',1500,3000],
+  ['foundation','Foundation',10000,30000],
+  ['electrical','Electrical',4000,8000],
+  ['plumbing','Plumbing',3000,8000],
+  ['kitchen','Kitchen',10000,25000],
+  ['bathrooms','Bathrooms',5000,15000],
+  ['windows','Windows',5000,12000],
+  ['flooring','Flooring',3000,10000],
+]
+
+const BLANK_DETAILS = { beds:'', baths:'', sqft:'', year_built:'', occupancy:'Unknown',
+  asking_price:'', timeline:'Unsure', sell_reason:'Unknown', repairs:{}, repair_notes:'', seller_notes:'' }
+
 const BLANK = { name:'', address:'', city:'', state:'NJ', lead_type:'Lis Pendens',
-  arv:'', owed:'', phone:'', freshness:100, times_contacted:0, motivation:50, skiptraced:false }
+  arv:'', owed:'', phone:'', freshness:100, times_contacted:0, motivation:50, skiptraced:false,
+  details: BLANK_DETAILS }
+
+function detailsOf(l){
+  const d = l.details || {}
+  return {...BLANK_DETAILS, ...d, repairs: d.repairs || {}}
+}
 
 function friendlyErr(msg){
   const m = String(msg||'')
   if(/failed to fetch|network|fetch/i.test(m)) return "Can't reach the database right now. It may still be waking up — give it a minute, then hit Retry."
+  if(/details.*column|column.*details|schema cache/i.test(m)) return "The database is missing the new 'details' column. Run supabase/add-details-column.sql (in your repo) in the Supabase SQL Editor, then retry."
   return m
 }
 
@@ -154,20 +177,45 @@ function LeadsPage({leads,loading,reload,loadErr,isMobile}){
   const [filter,setFilter] = useState('All')
   const [formErr,setFormErr] = useState('')
   const [saving,setSaving] = useState(false)
+  const [editId,setEditId] = useState(null)
 
   const ranked = [...leads].sort((a,b)=>scoreOf(b)-scoreOf(a))
   const shown = ranked.filter(l=> filter==='All' || l.state===filter)
   const sel = leads.find(l=>l.id===selId) || shown[0] || null
   const set = (k,v)=> setForm({...form,[k]:v})
+  const setD = (k,v)=> setForm({...form, details:{...form.details,[k]:v}})
 
-  async function add(){
+  function openAdd(){
+    if(showAdd && !editId){ setShowAdd(false); return }
+    setForm({...BLANK, details:{...BLANK_DETAILS, repairs:{}}})
+    setEditId(null); setFormErr(''); setShowAdd(true)
+  }
+  function openEdit(l){
+    setForm({
+      name:l.name||'', address:l.address||'', city:l.city||'', state:l.state||'NJ',
+      lead_type:l.lead_type||'Lis Pendens', arv:l.arv||'', owed:l.owed||'', phone:l.phone||'',
+      freshness:l.freshness??100, times_contacted:l.times_contacted??0, motivation:l.motivation??50,
+      skiptraced:!!l.skiptraced, details: detailsOf(l)
+    })
+    setEditId(l.id); setFormErr(''); setShowAdd(true)
+    window.scrollTo({top:0,behavior:'smooth'})
+  }
+
+  async function save(){
     if(!form.name.trim()){ setFormErr('Add an owner name before saving.'); return }
     setSaving(true); setFormErr('')
     try{
-      const payload = {...form, arv:Number(form.arv)||0, owed:Number(form.owed)||0}
-      const { error } = await supabase.from('leads').insert([payload])
+      const numOr = v => v===''||v===null||v===undefined ? null : (Number(v)||null)
+      const d = form.details
+      const payload = {...form, arv:Number(form.arv)||0, owed:Number(form.owed)||0,
+        details:{...d, beds:numOr(d.beds), baths:numOr(d.baths), sqft:numOr(d.sqft),
+          year_built:numOr(d.year_built), asking_price:numOr(d.asking_price)}}
+      const { error } = editId
+        ? await supabase.from('leads').update(payload).eq('id',editId)
+        : await supabase.from('leads').insert([payload])
       if(error) throw error
-      setForm(BLANK); setShowAdd(false); reload()
+      setForm({...BLANK, details:{...BLANK_DETAILS, repairs:{}}})
+      setShowAdd(false); setEditId(null); reload()
     }catch(e){ setFormErr(friendlyErr(e.message)) }
     setSaving(false)
   }
@@ -187,11 +235,12 @@ function LeadsPage({leads,loading,reload,loadErr,isMobile}){
           <h1 style={{fontFamily:'Georgia,serif',fontSize:isMobile?22:27,margin:0,fontWeight:600}}>Leads + Your VA</h1>
           <p style={{color:C.muted,margin:'3px 0 0',fontSize:isMobile?12.5:13.5,maxWidth:640}}>Ranked by lead quality - freshness, contact history, motivation, equity and skip-trace.</p>
         </div>
-        <button onClick={()=>setShowAdd(!showAdd)} style={{background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'11px 20px',fontWeight:800,cursor:'pointer',whiteSpace:'nowrap'}}>{showAdd?'Close':'+ Add Lead'}</button>
+        <button onClick={openAdd} style={{background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'11px 20px',fontWeight:800,cursor:'pointer',whiteSpace:'nowrap'}}>{showAdd&&!editId?'Close':'+ Add Lead'}</button>
       </div>
 
       {showAdd &&
-      <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:14,padding:20,marginBottom:18}}>
+      <div style={{background:C.panel,border:'1px solid '+(editId?C.orange:C.line),borderRadius:14,padding:20,marginBottom:18}}>
+        {editId && <div style={{color:C.orange,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1,marginBottom:12}}>Editing: {form.name||'lead'}</div>}
         <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'repeat(3,1fr)',gap:10}}>
           <In ph="Owner name" v={form.name} on={v=>set('name',v)}/>
           <In ph="Phone" v={form.phone} on={v=>set('phone',v)}/>
@@ -210,8 +259,36 @@ function LeadsPage({leads,loading,reload,loadErr,isMobile}){
         <label style={{display:'flex',gap:8,alignItems:'center',marginTop:14,fontSize:13,color:C.muted}}>
           <input type="checkbox" checked={form.skiptraced} onChange={e=>set('skiptraced',e.target.checked)}/> Skip-trace confirmed
         </label>
+
+        <div style={{borderTop:'1px solid '+C.line,marginTop:18,paddingTop:16}}>
+          <div style={{color:C.orange,fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>Property & Seller Intel</div>
+          <div style={{color:C.muted,fontSize:12,marginBottom:12}}>This becomes the Call Card your caller sees while negotiating.</div>
+          <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(5,1fr)',gap:10}}>
+            <In ph="Beds" v={form.details.beds} on={v=>setD('beds',v)} type="number"/>
+            <In ph="Baths" v={form.details.baths} on={v=>setD('baths',v)} type="number"/>
+            <In ph="Sqft" v={form.details.sqft} on={v=>setD('sqft',v)} type="number"/>
+            <In ph="Year built" v={form.details.year_built} on={v=>setD('year_built',v)} type="number"/>
+            <Sel v={form.details.occupancy} on={v=>setD('occupancy',v)} opts={['Unknown','Owner occupied','Tenant','Vacant']}/>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'repeat(3,1fr)',gap:10,marginTop:10}}>
+            <In ph="Seller asking price" v={form.details.asking_price} on={v=>setD('asking_price',v)} type="number"/>
+            <Sel v={form.details.timeline} on={v=>setD('timeline',v)} opts={['Unsure','ASAP','30 days','60 days','90+ days','Just testing market']}/>
+            <Sel v={form.details.sell_reason} on={v=>setD('sell_reason',v)} opts={['Unknown','Foreclosure','Tax delinquent','Inherited / probate','Divorce','Tired landlord','Relocation','Vacant / repairs','Other']}/>
+          </div>
+          <div style={{color:C.muted,fontSize:12,margin:'14px 0 8px'}}>Repairs needed — check everything the seller mentions:</div>
+          <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(5,1fr)',gap:8}}>
+            {REPAIRS.map(([k,label])=>(
+              <label key={k} style={{display:'flex',gap:7,alignItems:'center',background:C.ink,border:'1px solid '+(form.details.repairs[k]?C.orange:C.line),borderRadius:8,padding:'9px 10px',fontSize:12,color:form.details.repairs[k]?C.cream:C.muted,cursor:'pointer'}}>
+                <input type="checkbox" checked={!!form.details.repairs[k]} onChange={e=>setD('repairs',{...form.details.repairs,[k]:e.target.checked})}/>{label}
+              </label>
+            ))}
+          </div>
+          <textarea placeholder="Repair notes — what the seller said about condition (age of roof, leaks, last HVAC service...)" value={form.details.repair_notes} onChange={e=>setD('repair_notes',e.target.value)} rows={2} style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'10px 12px',color:C.cream,fontSize:13,outline:'none',width:'100%',boxSizing:'border-box',marginTop:12,resize:'vertical',fontFamily:'inherit'}}/>
+          <textarea placeholder="Seller notes — situation, family, urgency, anything useful on the next call..." value={form.details.seller_notes} onChange={e=>setD('seller_notes',e.target.value)} rows={2} style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'10px 12px',color:C.cream,fontSize:13,outline:'none',width:'100%',boxSizing:'border-box',marginTop:10,resize:'vertical',fontFamily:'inherit'}}/>
+        </div>
+
         {formErr && <div style={{background:C.red+'1e',border:'1px solid '+C.red+'55',color:C.red,borderRadius:8,padding:'10px 12px',fontSize:12.5,marginTop:14,lineHeight:1.45}}>{formErr}</div>}
-        <button onClick={add} disabled={saving} style={{marginTop:16,background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'11px 22px',fontWeight:800,cursor:saving?'default':'pointer',opacity:saving?0.7:1}}>{saving?'Saving...':'Save Lead'}</button>
+        <button onClick={save} disabled={saving} style={{marginTop:16,background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'11px 22px',fontWeight:800,cursor:saving?'default':'pointer',opacity:saving?0.7:1}}>{saving?'Saving...':editId?'Update Lead':'Save Lead'}</button>
       </div>}
 
       <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap'}}>
@@ -246,13 +323,13 @@ function LeadsPage({leads,loading,reload,loadErr,isMobile}){
             })}
           </div>
         </div>
-        {sel && <LeadDetail key={sel.id} lead={sel} onDelete={()=>remove(sel.id)} isMobile={isMobile}/>}
+        {sel && <LeadDetail key={sel.id} lead={sel} onDelete={()=>remove(sel.id)} onEdit={()=>openEdit(sel)} isMobile={isMobile}/>}
       </div>}
     </div>
   )
 }
 
-function LeadDetail({lead,onDelete,isMobile}){
+function LeadDetail({lead,onDelete,onEdit,isMobile}){
   const s=scoreOf(lead); const g=grade(s); const eq=eqOf(lead)
   const [msgs,setMsgs]=useState([
     {f:'va',t:'now',m:'Working '+lead.name.split(' ')[0]+' now. '+(lead.times_contacted===0?'Never contacted by another investor - fresh.':'Prior contact logged ('+lead.times_contacted+'x).')+' I will report back after calls.'}
@@ -282,6 +359,8 @@ function LeadDetail({lead,onDelete,isMobile}){
           </div>
         </div>
 
+        <CallCard lead={lead} onEdit={onEdit}/>
+
         <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:22}}>
           <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:1,marginBottom:16}}>Lead Quality Signals</div>
           <Signal label="Freshness" value={lead.freshness} display={freshLabel(lead.freshness)} color={C.blue}/>
@@ -292,7 +371,10 @@ function LeadDetail({lead,onDelete,isMobile}){
             <span style={{fontSize:18}}>{lead.skiptraced?'[OK]':'[!]'}</span>
             <span style={{color:lead.skiptraced?C.green:C.amber,fontSize:13,fontWeight:600}}>{lead.skiptraced?'Skip-trace confirmed - verified contact':'Skip-trace incomplete - number unverified'}</span>
           </div>
-          <button onClick={onDelete} style={{marginTop:16,background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'8px 14px',fontSize:12,cursor:'pointer'}}>Delete lead</button>
+          <div style={{display:'flex',gap:8,marginTop:16}}>
+            <button onClick={onEdit} style={{background:'transparent',border:'1px solid '+C.orange,color:C.orange,borderRadius:8,padding:'8px 14px',fontSize:12,fontWeight:700,cursor:'pointer'}}>Edit lead</button>
+            <button onClick={onDelete} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'8px 14px',fontSize:12,cursor:'pointer'}}>Delete lead</button>
+          </div>
         </div>
       </div>
 
@@ -323,6 +405,77 @@ function LeadDetail({lead,onDelete,isMobile}){
         </div>
         <div style={{color:C.muted,fontSize:10,marginTop:8,textAlign:'center'}}>Preview - live VA messaging connects in the next build.</div>
       </div>
+    </div>
+  )
+}
+
+function CallCard({lead,onEdit}){
+  const d = detailsOf(lead)
+  const flagged = REPAIRS.filter(([k])=>d.repairs[k])
+  const lo = flagged.reduce((s,r)=>s+r[2],0)
+  const hi = flagged.reduce((s,r)=>s+r[3],0)
+  const ask = Number(d.asking_price)||0
+  const arv = Number(lead.arv)||0
+  const ceiling = arv ? Math.max(0, Math.round(arv*0.70 - hi - 15000)) : 0
+  const facts = []
+  if(d.occupancy!=='Unknown') facts.push(d.occupancy)
+  if(d.beds) facts.push(d.beds+'bd')
+  if(d.baths) facts.push(d.baths+'ba')
+  if(d.sqft) facts.push(Number(d.sqft).toLocaleString()+' sqft')
+  if(d.year_built) facts.push('built '+d.year_built)
+  const empty = facts.length===0 && flagged.length===0 && !ask && d.sell_reason==='Unknown' && d.timeline==='Unsure' && !d.seller_notes && !d.repair_notes
+
+  return (
+    <div style={{background:C.panel,border:'1px solid '+C.orange+'66',borderRadius:16,padding:22}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+        <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:1,color:C.orange}}>Call Card — negotiation facts</div>
+        <button onClick={onEdit} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'5px 11px',fontSize:11,cursor:'pointer'}}>Update</button>
+      </div>
+
+      {empty ?
+      <div style={{color:C.muted,fontSize:13,lineHeight:1.55}}>No intel on this property yet. Hit <span style={{color:C.orange,fontWeight:700}}>Update</span> and fill in the condition, asking price and seller situation before the next call — that's your leverage.</div>
+      :
+      <div>
+        {facts.length>0 && <div style={{color:C.cream,fontSize:13,marginBottom:12}}>{facts.join(' · ')}</div>}
+
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:14}}>
+          <div style={{background:C.ink,borderRadius:10,padding:'10px 12px'}}>
+            <div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>Why selling</div>
+            <div style={{color:d.sell_reason==='Unknown'?C.muted:C.cream,fontSize:13,fontWeight:600,marginTop:3}}>{d.sell_reason}</div>
+          </div>
+          <div style={{background:C.ink,borderRadius:10,padding:'10px 12px'}}>
+            <div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>Timeline</div>
+            <div style={{color:d.timeline==='ASAP'?C.green:C.cream,fontSize:13,fontWeight:600,marginTop:3}}>{d.timeline}</div>
+          </div>
+          <div style={{background:C.ink,borderRadius:10,padding:'10px 12px'}}>
+            <div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>Asking</div>
+            <div style={{color:ask?C.cream:C.muted,fontSize:13,fontWeight:600,marginTop:3}}>{ask?money(ask):'—'}</div>
+          </div>
+        </div>
+
+        {flagged.length>0 &&
+        <div style={{background:C.ink,borderRadius:10,padding:'12px 14px',marginBottom:12}}>
+          <div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1,marginBottom:8}}>Repair ammo — use these on the call</div>
+          {flagged.map(([k,label,l2,h2])=>(
+            <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'3px 0',fontSize:13}}>
+              <span style={{color:C.cream}}>{label}</span>
+              <span style={{color:C.amber,fontWeight:600}}>{money(l2)}–{money(h2)}</span>
+            </div>
+          ))}
+          <div style={{display:'flex',justifyContent:'space-between',borderTop:'1px solid '+C.line,marginTop:8,paddingTop:8,fontSize:13}}>
+            <span style={{color:C.cream,fontWeight:700}}>Total to justify your discount</span>
+            <span style={{color:C.orange,fontWeight:800}}>{money(lo)}–{money(hi)}</span>
+          </div>
+        </div>}
+
+        {ask>0 && arv>0 &&
+        <div style={{background:C.orange+'14',border:'1px solid '+C.orange+'44',borderRadius:10,padding:'11px 14px',marginBottom:12,fontSize:12.5,color:C.cream,lineHeight:1.5}}>
+          Seller wants <b>{money(ask)}</b>. With {flagged.length>0?'the repairs above':'repairs'} + your fee, your 70%-rule ceiling is about <b style={{color:C.orange}}>{money(ceiling)}</b>{ask>ceiling?' — that gap is the conversation.':' — asking is already inside your number.'}
+        </div>}
+
+        {d.repair_notes && <div style={{marginBottom:8}}><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>Condition notes</div><div style={{color:C.cream,fontSize:13,lineHeight:1.5}}>{d.repair_notes}</div></div>}
+        {d.seller_notes && <div><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>Seller notes</div><div style={{color:C.cream,fontSize:13,lineHeight:1.5}}>{d.seller_notes}</div></div>}
+      </div>}
     </div>
   )
 }
