@@ -83,3 +83,15 @@ export async function patchLead(lead, detailsPatch, columns={}){
 export function moveStage(lead, stage, extra={}){
   return patchLead(lead, { stage, stage_at:new Date().toISOString(), ...extra })
 }
+
+// ---------- Lead quality score (0-100) ----------
+export function eqOf(l){ return l.arv>0 ? Math.min(100, Math.round((1 - l.owed/l.arv)*100)) : 0 }
+export function scoreOf(l){
+  const fresh = l.freshness
+  const contact = Math.max(0, 100 - l.times_contacted*28)
+  const mot = l.motivation
+  const eq = eqOf(l)
+  const skip = l.skiptraced ? 100 : 40
+  return Math.round(fresh*0.25 + contact*0.25 + mot*0.2 + eq*0.15 + skip*0.15)
+}
+export const gradeLetter = s => s>=80?'A':s>=65?'B':s>=50?'C':'D'

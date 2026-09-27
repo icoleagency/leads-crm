@@ -3,8 +3,10 @@ import { supabase } from './supabaseClient'
 import AcademyPage from './AcademyPage'
 import CommandCenter from './CommandCenter'
 import KpiPage from './KpiPage'
-import { REPAIRS, BLANK_DETAILS, detailsOf, money, compResult, stageOf, stageIdx, STAGE, OUTCOME_STAGE, moveStage, patchLead } from './leadModel'
+import { REPAIRS, BLANK_DETAILS, detailsOf, money, compResult, eqOf, scoreOf, stageOf, stageIdx, STAGE, OUTCOME_STAGE, moveStage, patchLead } from './leadModel'
 import Pipeline from './Pipeline'
+import VaWorkspace from './VaWorkspace'
+import { fetchTeam, teamErr as teamErrMsg, campaignOf, campaignName } from './team'
 import DealAnalyzer from './DealAnalyzer'
 import { OUTCOMES, OUTCOME, fetchActivity, logActivity, activityErr, tally, inLastDays, getCaller, saveCaller } from './activity'
 
@@ -23,15 +25,6 @@ function useIsMobile(){
   return m
 }
 
-function eqOf(l){ return l.arv>0 ? Math.min(100, Math.round((1 - l.owed/l.arv)*100)) : 0 }
-function scoreOf(l){
-  const fresh = l.freshness
-  const contact = Math.max(0, 100 - l.times_contacted*28)
-  const mot = l.motivation
-  const eq = eqOf(l)
-  const skip = l.skiptraced ? 100 : 40
-  return Math.round(fresh*0.25 + contact*0.25 + mot*0.2 + eq*0.15 + skip*0.15)
-}
 function grade(s){
   if(s>=80) return {g:'A',c:C.green,label:'Prime lead'}
   if(s>=65) return {g:'B',c:C.amber,label:'Solid lead'}
@@ -52,7 +45,8 @@ function friendlyErr(msg){
 }
 
 const NAV = [
-  ['leads','L','Leads + VA'],
+  ['leads','L','Leads'],
+  ['va','V','VA Workspace'],
   ['command','H','Command Center'],
   ['kpis','K','KPIs'],
   ['pipeline','P','Pipeline'],
@@ -71,9 +65,16 @@ export default function App(){
   const [actErr,setActErr] = useState('')
   const [analyzeId,setAnalyzeId] = useState('')
   const [focusId,setFocusId] = useState('')
+  const [campaigns,setCampaigns] = useState([])
+  const [team,setTeam] = useState([])
+  const [tErr,setTErr] = useState('')
   const reloadQuiet = ()=>load(true)
 
-  useEffect(()=>{ load(); loadActivity() },[])
+  useEffect(()=>{ load(); loadActivity(); loadTeam() },[])
+  async function loadTeam(){
+    try{ const r = await fetchTeam(); setCampaigns(r.campaigns); setTeam(r.team); setTErr('') }
+    catch(e){ setTErr(teamErrMsg(e.message)) }
+  }
   async function load(silent){
     if(silent!==true) setLoading(true)
     try{
@@ -130,11 +131,12 @@ export default function App(){
 
         <div style={{padding:isMobile?'18px 16px':'26px 30px',width:'100%',maxWidth:1240,margin:0,boxSizing:'border-box'}}>
           {err && <ErrorBanner msg={err} onRetry={load} onClose={()=>setErr('')}/>}
-          {page==='leads' && <LeadsPage key={focusId||'all'} initialSel={focusId} leads={leads} loading={loading} reload={load} reloadQuiet={reloadQuiet} loadErr={err} activity={activity} reloadActivity={loadActivity} onAnalyze={analyzeLead} isMobile={isMobile}/>}
+          {page==='va' && <VaWorkspace leads={leads} activity={activity} campaigns={campaigns} team={team} teamErr={tErr} reloadTeam={loadTeam} reloadLeads={reloadQuiet} openLead={openLead} isMobile={isMobile}/>}
+          {page==='leads' && <LeadsPage key={focusId||'all'} initialSel={focusId} campaigns={campaigns} leads={leads} loading={loading} reload={load} reloadQuiet={reloadQuiet} loadErr={err} activity={activity} reloadActivity={loadActivity} onAnalyze={analyzeLead} isMobile={isMobile}/>}
           {page==='comping' && <DealAnalyzer key={analyzeId||'blank'} leads={leads} initialLeadId={analyzeId} reload={load} isMobile={isMobile}/>}
           {page==='academy' && <AcademyPage isMobile={isMobile}/>}
-          {page==='command' && <CommandCenter leads={leads} activity={activity} isMobile={isMobile} goTo={go}/>}
-          {page==='kpis' && <KpiPage activity={activity} actErr={actErr} reload={loadActivity} isMobile={isMobile} goTo={go}/>}
+          {page==='command' && <CommandCenter leads={leads} activity={activity} reload={reloadQuiet} openLead={openLead} isMobile={isMobile} goTo={go}/>}
+          {page==='kpis' && <KpiPage leads={leads} campaigns={campaigns} activity={activity} actErr={actErr} reload={loadActivity} isMobile={isMobile} goTo={go}/>}
           {page==='pipeline' && <Pipeline leads={leads} activity={activity} reload={reloadQuiet} openLead={openLead} analyze={analyzeLead} isMobile={isMobile}/>}
         </div>
       </div>
@@ -154,7 +156,8 @@ function ErrorBanner({msg,onRetry,onClose}){
   )
 }
 
-function LeadsPage({leads,loading,reload,reloadQuiet,loadErr,activity,reloadActivity,onAnalyze,initialSel,isMobile}){
+function LeadsPage({leads,campaigns=[],loading,reload,reloadQuiet,loadErr,activity,reloadActivity,onAnalyze,initialSel,isMobile}){
+  const [campFilter,setCampFilter] = useState('')
   const [selId,setSelId] = useState(()=>{ const l=leads.find(x=>String(x.id)===String(initialSel)); return l?l.id:null })
   const [showAdd,setShowAdd] = useState(false)
   const [form,setForm] = useState(BLANK)
@@ -164,7 +167,7 @@ function LeadsPage({leads,loading,reload,reloadQuiet,loadErr,activity,reloadActi
   const [editId,setEditId] = useState(null)
 
   const ranked = [...leads].sort((a,b)=>scoreOf(b)-scoreOf(a))
-  const shown = ranked.filter(l=> filter==='All' || l.state===filter)
+  const shown = ranked.filter(l=> (filter==='All' || l.state===filter) && (!campFilter || (campFilter==='none' ? !campaignOf(l) : campaignOf(l)===campFilter)))
   const sel = leads.find(l=>l.id===selId) || shown[0] || null
   const set = (k,v)=> setForm({...form,[k]:v})
   const setD = (k,v)=> setForm({...form, details:{...form.details,[k]:v}})
@@ -232,6 +235,11 @@ function LeadsPage({leads,loading,reload,reloadQuiet,loadErr,activity,reloadActi
           <In ph="City" v={form.city} on={v=>set('city',v)}/>
           <Sel v={form.state} on={v=>set('state',v)} opts={['NJ','FL','DE','PA','Other']}/>
           <Sel v={form.lead_type} on={v=>set('lead_type',v)} opts={['Lis Pendens','Pre-Foreclosure','Tax Delinquent','Vacant','Inherited','Divorce']}/>
+          {campaigns.length>0 &&
+          <select value={form.details.campaign||''} onChange={e=>setD('campaign',e.target.value)} style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'10px 12px',color:form.details.campaign?C.cream:C.muted,fontSize:13,width:'100%',boxSizing:'border-box'}}>
+            <option value="">Campaign (county)...</option>
+            {campaigns.map(c=><option key={c.id} value={String(c.id)}>{c.name}</option>)}
+          </select>}
           <In ph="ARV" v={form.arv} on={v=>set('arv',v)} type="number"/>
           <In ph="Owed" v={form.owed} on={v=>set('owed',v)} type="number"/>
         </div>
@@ -279,6 +287,12 @@ function LeadsPage({leads,loading,reload,reloadQuiet,loadErr,activity,reloadActi
         {['All','NJ','FL','DE','PA'].map(s=>(
           <button key={s} onClick={()=>setFilter(s)} style={{border:'1px solid '+(filter===s?C.orange:C.line),background:filter===s?C.orange:'transparent',color:filter===s?C.ink:C.muted,borderRadius:20,padding:'6px 14px',fontWeight:600,cursor:'pointer',fontSize:13}}>{s}</button>
         ))}
+        {campaigns.length>0 &&
+        <select value={campFilter} onChange={e=>setCampFilter(e.target.value)} style={{background:C.ink,border:'1px solid '+(campFilter?C.orange:C.line),borderRadius:20,padding:'6px 12px',color:campFilter?C.cream:C.muted,fontSize:13}}>
+          <option value="">All campaigns</option>
+          {campaigns.map(c=><option key={c.id} value={String(c.id)}>{c.name}</option>)}
+          <option value="none">No campaign</option>
+        </select>}
       </div>
 
       {loading ? <p style={{color:C.muted}}>Loading...</p> :
@@ -299,6 +313,7 @@ function LeadsPage({leads,loading,reload,reloadQuiet,loadErr,activity,reloadActi
                   <div style={{color:C.muted,fontSize:11,marginTop:3}}>{l.city}, {l.state} - {l.lead_type}</div>
                   <div style={{display:'flex',gap:6,marginTop:8,flexWrap:'wrap'}}>
                     {(()=>{ const st=stageOf(l,activity); return st!=='new' ? <Tag c={STAGE[st].c}>{STAGE[st].l}</Tag> : null })()}
+                    {campaignOf(l) && campaignName(campaigns,campaignOf(l)) && <Tag c={C.muted}>{campaignName(campaigns,campaignOf(l))}</Tag>}
                     <Tag c={C.blue}>{freshLabel(l.freshness)}</Tag>
                     {l.times_contacted===0? <Tag c={C.green}>Never called</Tag> : <Tag c={l.times_contacted<=1?C.amber:C.red}>{l.times_contacted}x called</Tag>}
                     {l.skiptraced && <Tag c={C.green}>traced</Tag>}
@@ -316,11 +331,6 @@ function LeadsPage({leads,loading,reload,reloadQuiet,loadErr,activity,reloadActi
 
 function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,reloadLeads,onAnalyze,isMobile}){
   const s=scoreOf(lead); const g=grade(s); const eq=eqOf(lead)
-  const [msgs,setMsgs]=useState([
-    {f:'va',t:'now',m:'Working '+lead.name.split(' ')[0]+' now. '+(lead.times_contacted===0?'Never contacted by another investor - fresh.':'Prior contact logged ('+lead.times_contacted+'x).')+' I will report back after calls.'}
-  ])
-  const [draft,setDraft]=useState('')
-  const send=()=>{ if(!draft.trim())return; setMsgs([...msgs,{f:'you',t:'now',m:draft.trim()}]); setDraft('') }
 
   return (
     <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'1fr 1fr',gap:16}}>
@@ -366,34 +376,46 @@ function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,reloadLeads,on
       <div style={{display:'flex',flexDirection:'column',gap:16}}>
         <ScriptPanel lead={lead}/>
         <LogCall lead={lead} activity={activity} reloadActivity={reloadActivity} reloadLeads={reloadLeads}/>
-        <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:22,display:'flex',flexDirection:'column',minHeight:isMobile?360:420}}>
-        <div style={{display:'flex',alignItems:'center',gap:10,paddingBottom:14,borderBottom:'1px solid '+C.line,marginBottom:14}}>
-          <div style={{width:38,height:38,borderRadius:'50%',background:'linear-gradient(135deg,'+C.orange+','+C.orangeSoft+')',display:'flex',alignItems:'center',justifyContent:'center',color:C.ink,fontWeight:800,flexShrink:0}}>S</div>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{fontWeight:700,fontSize:14}}>Sofia - Your VA</div>
-            <div style={{display:'flex',alignItems:'center',gap:5}}>
-              <span style={{width:6,height:6,borderRadius:6,background:C.green}}/>
-              <span style={{color:C.green,fontSize:11}}>working this lead now</span>
-            </div>
-          </div>
-          <span style={{color:C.muted,fontSize:11,whiteSpace:'nowrap'}}>on {lead.name.split(' ')[0]}</span>
-        </div>
-        <div style={{flex:1,overflowY:'auto',paddingRight:4,minHeight:120}}>
-          {msgs.map((m,i)=>(
-            <div key={i} style={{display:'flex',justifyContent:m.f==='you'?'flex-end':'flex-start',marginBottom:10}}>
-              <div style={{maxWidth:'82%',background:m.f==='you'?C.orange:C.panel2,color:m.f==='you'?C.ink:C.cream,border:m.f==='you'?'none':'1px solid '+C.line,padding:'11px 14px',borderRadius:14,fontSize:13,lineHeight:1.45}}>
-                {m.m}<div style={{fontSize:10,opacity:0.65,marginTop:5}}>{m.t}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div style={{display:'flex',gap:8,marginTop:12}}>
-          <input value={draft} onChange={e=>setDraft(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} placeholder="Message Sofia..." style={{flex:1,minWidth:0,background:C.ink,border:'1px solid '+C.line,borderRadius:10,padding:'11px 14px',color:C.cream,fontSize:13,outline:'none'}}/>
-          <button onClick={send} style={{background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'0 20px',fontWeight:800,cursor:'pointer'}}>Send</button>
-        </div>
-        <div style={{color:C.muted,fontSize:10,marginTop:8,textAlign:'center'}}>Preview - live VA messaging connects in the next build.</div>
+        <HandoffPanel lead={lead} reloadLeads={reloadLeads}/>
       </div>
-      </div>
+    </div>
+  )
+}
+
+function HandoffPanel({lead,reloadLeads}){
+  const h = (lead.details && lead.details.handoff) || null
+  const [note,setNote] = useState('')
+  const [busy,setBusy] = useState(false)
+  const [err,setErr] = useState('')
+  async function save(patch){
+    setBusy(true); setErr('')
+    try{ await patchLead(lead, { handoff:patch }); setNote(''); if(reloadLeads) await reloadLeads() }
+    catch(e){ setErr(/fetch/i.test(e.message)?"Can't reach the database — try again in a minute.":e.message) }
+    setBusy(false)
+  }
+  const when = iso => iso ? new Date(iso).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''
+  const open = h && h.status==='open'
+  return (
+    <div style={{background:C.panel,border:'1px solid '+(open?C.amber+'88':C.line),borderRadius:16,padding:22}}>
+      <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:1,marginBottom:10}}>Hot lead hand-off</div>
+      {open ?
+      <div>
+        <div style={{background:C.amber+'14',border:'1px solid '+C.amber+'55',borderRadius:10,padding:'11px 13px'}}>
+          <div style={{color:C.amber,fontSize:12,fontWeight:700}}>Waiting on the closer · handed off by {h.by} · {when(h.at)}</div>
+          {h.note && <div style={{color:C.cream,fontSize:13.5,lineHeight:1.5,marginTop:6}}>{h.note}</div>}
+        </div>
+        <div style={{display:'flex',gap:8,marginTop:10}}>
+          <button disabled={busy} onClick={()=>save({...h,status:'done',done_at:new Date().toISOString()})} style={{background:C.green,color:C.ink,border:'none',borderRadius:8,padding:'8px 14px',fontSize:12,fontWeight:800,cursor:'pointer'}}>Mark handled</button>
+          <button disabled={busy} onClick={()=>save(null)} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'8px 14px',fontSize:12,cursor:'pointer'}}>Cancel hand-off</button>
+        </div>
+      </div> :
+      <div>
+        {h && h.status==='done' && <div style={{color:C.green,fontSize:12,marginBottom:10}}>Last hand-off from {h.by} was handled {when(h.done_at)}.</div>}
+        <div style={{color:C.muted,fontSize:12.5,lineHeight:1.5,marginBottom:10}}>Seller is motivated or an appointment is set? Send it to the closer with what they need to know.</div>
+        <textarea value={note} onChange={e=>setNote(e.target.value)} rows={3} placeholder="e.g. Wants out in 30 days, roof leaks, open to $140k. Call her after 5pm." style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'10px 12px',color:C.cream,fontSize:13,outline:'none',width:'100%',boxSizing:'border-box',resize:'vertical',fontFamily:'inherit'}}/>
+        <button disabled={busy||!note.trim()} onClick={()=>save({status:'open',by:getCaller()||'VA',note:note.trim(),at:new Date().toISOString()})} style={{marginTop:10,background:C.orange,color:C.ink,border:'none',borderRadius:8,padding:'9px 16px',fontSize:12.5,fontWeight:800,cursor:(busy||!note.trim())?'default':'pointer',opacity:(busy||!note.trim())?0.5:1}}>Hand off to closer</button>
+      </div>}
+      {err && <div style={{color:C.red,fontSize:12.5,marginTop:10}}>{err}</div>}
     </div>
   )
 }

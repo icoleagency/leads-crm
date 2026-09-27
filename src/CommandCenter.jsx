@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
 import { tally, inLastDays } from './activity'
+import { openHandoff } from './team'
+import { patchLead } from './leadModel'
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -23,7 +25,14 @@ const money = n => '$'+Number(n||0).toLocaleString()
 const ACADEMY_TOTAL = 20
 const ASSIGN_FEE = 15000
 
-export default function CommandCenter({leads,activity=[],isMobile,goTo}){
+export default function CommandCenter({leads,activity=[],reload,openLead,isMobile,goTo}){
+  const [busyId,setBusyId] = useState(null)
+  const handoffs = leads.filter(l=>openHandoff(l)).sort((a,b)=>new Date(a.details.handoff.at)-new Date(b.details.handoff.at))
+  async function handled(l){
+    setBusyId(l.id)
+    try{ await patchLead(l,{handoff:{...l.details.handoff,status:'done',done_at:new Date().toISOString()}}); if(reload) await reload() }catch{ /* shown as still open */ }
+    setBusyId(null)
+  }
   const [academyPct,setAcademyPct] = useState(0)
   const today = tally(inLastDays(activity,1))
 
@@ -53,6 +62,26 @@ export default function CommandCenter({leads,activity=[],isMobile,goTo}){
     <div>
       <h1 style={{fontFamily:'Georgia,serif',fontSize:isMobile?22:27,margin:0,fontWeight:600}}>Command Center</h1>
       <p style={{color:C.muted,margin:'3px 0 0',fontSize:isMobile?12.5:13.5,maxWidth:640}}>Everything moving in your business, right now.</p>
+
+      {handoffs.length>0 &&
+      <div style={{background:C.panel,border:'1px solid '+C.amber+'88',borderRadius:16,padding:20,marginTop:20}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+          <span style={{fontWeight:700,fontSize:14}}>Hot lead hand-offs <span style={{color:C.amber}}>({handoffs.length})</span></span>
+          <span style={{color:C.muted,fontSize:11.5}}>From your VAs — oldest first</span>
+        </div>
+        {handoffs.map(l=>{ const h=l.details.handoff; const hrs=Math.floor((Date.now()-new Date(h.at).getTime())/3600000); return (
+          <div key={l.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,padding:'10px 0',borderTop:'1px solid '+C.line,flexWrap:'wrap'}}>
+            <div style={{minWidth:0,flex:1}}>
+              <div style={{fontWeight:600,fontSize:14}}>{l.name} <span style={{color:C.muted,fontWeight:400,fontSize:12}}>· {l.city}, {l.state} · from {h.by} · {hrs<1?'just now':hrs<24?hrs+'h ago':Math.floor(hrs/24)+'d ago'}</span></div>
+              {h.note && <div style={{color:C.cream,fontSize:13,marginTop:3,lineHeight:1.45}}>{h.note}</div>}
+            </div>
+            <div style={{display:'flex',gap:6,flexShrink:0}}>
+              <button onClick={()=>openLead&&openLead(l.id)} style={{background:C.orange,color:C.ink,border:'none',borderRadius:8,padding:'7px 13px',fontSize:12,fontWeight:800,cursor:'pointer'}}>Open lead</button>
+              <button disabled={busyId===l.id} onClick={()=>handled(l)} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'7px 12px',fontSize:12,cursor:'pointer'}}>Handled</button>
+            </div>
+          </div>
+        )})}
+      </div>}
 
       <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(4,1fr)',gap:14,marginTop:20}}>
         {stats.map((s,i)=>(

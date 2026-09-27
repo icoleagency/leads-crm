@@ -15,7 +15,7 @@ function groupBy(rows, key){
   return Object.entries(m).map(([k,v])=>({k, t:tally(v)})).sort((a,b)=>b.t.dials-a.t.dials)
 }
 
-export default function KpiPage({activity,actErr,reload,isMobile,goTo}){
+export default function KpiPage({leads=[],campaigns=[],activity,actErr,reload,isMobile,goTo}){
   const [days,setDays] = useState(7)
   const [caller,setCaller] = useState('All')
 
@@ -68,6 +68,9 @@ export default function KpiPage({activity,actErr,reload,isMobile,goTo}){
 
   const byCaller = groupBy(inLastDays(activity,days),'caller')
   const byType = groupBy(rows,'lead_type')
+  const campOfLead = {}
+  for(const l of leads){ const id=l.details&&l.details.campaign; if(id){ const c=campaigns.find(x=>String(x.id)===String(id)); if(c) campOfLead[String(l.id)]=c.name } }
+  const byCampaign = groupBy(rows.map(a=>({...a, campaign:campOfLead[a.lead_id]||'No campaign'})),'campaign')
 
   return (
     <div>
@@ -155,6 +158,11 @@ export default function KpiPage({activity,actErr,reload,isMobile,goTo}){
           <div style={{fontWeight:700,fontSize:14,marginBottom:10}}>By lead type <span style={{color:C.muted,fontWeight:400,fontSize:12}}>— which lists convert</span></div>
           <Table cols={['Lead type','Dials','Contact %','Offers','Contracts']} rows={byType.map(({k,t})=>[k,t.dials,pct(t.contacts,t.dials)+'%',t.offer,t.contract])} empty="No calls in this period."/>
         </div>
+        {campaigns.length>0 &&
+        <div style={{...card,gridColumn:'1/-1'}}>
+          <div style={{fontWeight:700,fontSize:14,marginBottom:10}}>By campaign <span style={{color:C.muted,fontWeight:400,fontSize:12}}>— which counties are working</span></div>
+          <Table cols={['Campaign','Dials','Contact %','Appts','Offers','Contracts','Closed']} rows={byCampaign.map(({k,t})=>[k,t.dials,pct(t.contacts,t.dials)+'%',t.appointment,t.offer,t.contract,t.closed])} empty="No calls in this period."/>
+        </div>}
       </div>
 
       <div style={{...card,marginTop:14}}>
