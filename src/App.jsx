@@ -3,6 +3,8 @@ import { supabase } from './supabaseClient'
 import AcademyPage from './AcademyPage'
 import CommandCenter from './CommandCenter'
 import KpiPage from './KpiPage'
+import { REPAIRS, BLANK_DETAILS, detailsOf, money, compResult } from './leadModel'
+import DealAnalyzer from './DealAnalyzer'
 import { OUTCOMES, OUTCOME, fetchActivity, logActivity, activityErr, tally, inLastDays, getCaller, saveCaller } from './activity'
 
 const C = {
@@ -35,33 +37,11 @@ function grade(s){
   if(s>=50) return {g:'C',c:C.orange,label:'Workable'}
   return {g:'D',c:C.red,label:'Low priority'}
 }
-const money = n => '$'+Number(n||0).toLocaleString()
 function freshLabel(f){ if(f>=90) return 'New · fresh'; if(f>=60) return 'Recent'; if(f>=30) return 'Aging'; return 'Stale' }
-
-const REPAIRS = [
-  ['roof','Roof',8000,15000],
-  ['hvac','HVAC / furnace',5000,10000],
-  ['water_heater','Hot water tank',1500,3000],
-  ['foundation','Foundation',10000,30000],
-  ['electrical','Electrical',4000,8000],
-  ['plumbing','Plumbing',3000,8000],
-  ['kitchen','Kitchen',10000,25000],
-  ['bathrooms','Bathrooms',5000,15000],
-  ['windows','Windows',5000,12000],
-  ['flooring','Flooring',3000,10000],
-]
-
-const BLANK_DETAILS = { beds:'', baths:'', sqft:'', year_built:'', occupancy:'Unknown',
-  asking_price:'', timeline:'Unsure', sell_reason:'Unknown', repairs:{}, repair_notes:'', seller_notes:'' }
 
 const BLANK = { name:'', address:'', city:'', state:'NJ', lead_type:'Lis Pendens',
   arv:'', owed:'', phone:'', freshness:100, times_contacted:0, motivation:50, skiptraced:false,
   details: BLANK_DETAILS }
-
-function detailsOf(l){
-  const d = l.details || {}
-  return {...BLANK_DETAILS, ...d, repairs: d.repairs || {}}
-}
 
 function friendlyErr(msg){
   const m = String(msg||'')
@@ -75,7 +55,7 @@ const NAV = [
   ['command','H','Command Center'],
   ['kpis','K','KPIs'],
   ['pipeline','P','Pipeline'],
-  ['comping','C','Comping'],
+  ['comping','D','Deal Analyzer'],
   ['academy','A','Academy'],
 ]
 
@@ -88,6 +68,7 @@ export default function App(){
   const [err,setErr] = useState('')
   const [activity,setActivity] = useState([])
   const [actErr,setActErr] = useState('')
+  const [analyzeId,setAnalyzeId] = useState('')
 
   useEffect(()=>{ load(); loadActivity() },[])
   async function load(){
@@ -103,7 +84,8 @@ export default function App(){
     try{ setActivity(await fetchActivity(90)); setActErr('') }
     catch(e){ setActErr(activityErr(e.message)) }
   }
-  const go = (p)=>{ setPage(p); setMenuOpen(false) }
+  const go = (p)=>{ if(p==='comping') setAnalyzeId(''); setPage(p); setMenuOpen(false) }
+  const analyzeLead = (id)=>{ setAnalyzeId(String(id)); setPage('comping'); window.scrollTo({top:0}) }
   const today = tally(inLastDays(activity,1))
 
   return (
@@ -144,8 +126,8 @@ export default function App(){
 
         <div style={{padding:isMobile?'18px 16px':'26px 30px',width:'100%',maxWidth:1240,margin:0,boxSizing:'border-box'}}>
           {err && <ErrorBanner msg={err} onRetry={load} onClose={()=>setErr('')}/>}
-          {page==='leads' && <LeadsPage leads={leads} loading={loading} reload={load} loadErr={err} activity={activity} reloadActivity={loadActivity} isMobile={isMobile}/>}
-          {page==='comping' && <CompingPage leads={leads} isMobile={isMobile}/>}
+          {page==='leads' && <LeadsPage leads={leads} loading={loading} reload={load} loadErr={err} activity={activity} reloadActivity={loadActivity} onAnalyze={analyzeLead} isMobile={isMobile}/>}
+          {page==='comping' && <DealAnalyzer key={analyzeId||'blank'} leads={leads} initialLeadId={analyzeId} reload={load} isMobile={isMobile}/>}
           {page==='academy' && <AcademyPage isMobile={isMobile}/>}
           {page==='command' && <CommandCenter leads={leads} activity={activity} isMobile={isMobile} goTo={go}/>}
           {page==='kpis' && <KpiPage activity={activity} actErr={actErr} reload={loadActivity} isMobile={isMobile} goTo={go}/>}
@@ -181,7 +163,7 @@ function Placeholder({title,desc}){
   )
 }
 
-function LeadsPage({leads,loading,reload,loadErr,activity,reloadActivity,isMobile}){
+function LeadsPage({leads,loading,reload,loadErr,activity,reloadActivity,onAnalyze,isMobile}){
   const [selId,setSelId] = useState(null)
   const [showAdd,setShowAdd] = useState(false)
   const [form,setForm] = useState(BLANK)
@@ -334,13 +316,13 @@ function LeadsPage({leads,loading,reload,loadErr,activity,reloadActivity,isMobil
             })}
           </div>
         </div>
-        {sel && <LeadDetail key={sel.id} lead={sel} onDelete={()=>remove(sel.id)} onEdit={()=>openEdit(sel)} activity={activity} reloadActivity={reloadActivity} isMobile={isMobile}/>}
+        {sel && <LeadDetail key={sel.id} lead={sel} onDelete={()=>remove(sel.id)} onEdit={()=>openEdit(sel)} activity={activity} reloadActivity={reloadActivity} onAnalyze={()=>onAnalyze(sel.id)} isMobile={isMobile}/>}
       </div>}
     </div>
   )
 }
 
-function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,isMobile}){
+function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,onAnalyze,isMobile}){
   const s=scoreOf(lead); const g=grade(s); const eq=eqOf(lead)
   const [msgs,setMsgs]=useState([
     {f:'va',t:'now',m:'Working '+lead.name.split(' ')[0]+' now. '+(lead.times_contacted===0?'Never contacted by another investor - fresh.':'Prior contact logged ('+lead.times_contacted+'x).')+' I will report back after calls.'}
@@ -370,7 +352,7 @@ function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,isMobile}){
           </div>
         </div>
 
-        <CallCard lead={lead} onEdit={onEdit}/>
+        <CallCard lead={lead} onEdit={onEdit} onAnalyze={onAnalyze}/>
 
         <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:22}}>
           <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:1,marginBottom:16}}>Lead Quality Signals</div>
@@ -424,14 +406,15 @@ function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,isMobile}){
   )
 }
 
-function CallCard({lead,onEdit}){
+function CallCard({lead,onEdit,onAnalyze}){
+  const cr = compResult(lead)
   const d = detailsOf(lead)
   const flagged = REPAIRS.filter(([k])=>d.repairs[k])
   const lo = flagged.reduce((s,r)=>s+r[2],0)
   const hi = flagged.reduce((s,r)=>s+r[3],0)
   const ask = Number(d.asking_price)||0
   const arv = Number(lead.arv)||0
-  const ceiling = arv ? Math.max(0, Math.round(arv*0.70 - hi - 15000)) : 0
+  const ceiling = cr ? cr.walk : arv ? Math.max(0, Math.round(arv*0.70 - hi - 15000)) : 0
   const facts = []
   if(d.occupancy!=='Unknown') facts.push(d.occupancy)
   if(d.beds) facts.push(d.beds+'bd')
@@ -444,10 +427,20 @@ function CallCard({lead,onEdit}){
     <div style={{background:C.panel,border:'1px solid '+C.orange+'66',borderRadius:16,padding:22}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
         <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:1,color:C.orange}}>Call Card — negotiation facts</div>
-        <button onClick={onEdit} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'5px 11px',fontSize:11,cursor:'pointer'}}>Update</button>
+        <div style={{display:'flex',gap:6}}>
+          <button onClick={onAnalyze} style={{background:'transparent',border:'1px solid '+C.orange,color:C.orange,borderRadius:8,padding:'5px 11px',fontSize:11,fontWeight:700,cursor:'pointer'}}>{cr?'Re-run comps':'Run comps'}</button>
+          <button onClick={onEdit} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'5px 11px',fontSize:11,cursor:'pointer'}}>Update</button>
+        </div>
       </div>
 
-      {empty ?
+      {cr &&
+      <div style={{background:C.ink,borderRadius:10,padding:'11px 14px',marginBottom:12,display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
+        <div><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>ARV{cr.confidence?' · '+cr.confidence:''}</div><div style={{color:C.cream,fontSize:14,fontWeight:700,marginTop:3}}>{money(cr.arv)}</div></div>
+        <div><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>Rehab</div><div style={{color:C.cream,fontSize:14,fontWeight:700,marginTop:3}}>{money(cr.rehab)}</div></div>
+        <div><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>Offer range</div><div style={{color:C.orange,fontSize:14,fontWeight:700,marginTop:3}}>{money(cr.open)}–{money(cr.walk)}</div></div>
+      </div>}
+
+      {empty && !cr ?
       <div style={{color:C.muted,fontSize:13,lineHeight:1.55}}>No intel on this property yet. Hit <span style={{color:C.orange,fontWeight:700}}>Update</span> and fill in the condition, asking price and seller situation before the next call — that's your leverage.</div>
       :
       <div>
@@ -485,7 +478,7 @@ function CallCard({lead,onEdit}){
 
         {ask>0 && arv>0 &&
         <div style={{background:C.orange+'14',border:'1px solid '+C.orange+'44',borderRadius:10,padding:'11px 14px',marginBottom:12,fontSize:12.5,color:C.cream,lineHeight:1.5}}>
-          Seller wants <b>{money(ask)}</b>. With {flagged.length>0?'the repairs above':'repairs'} + your fee, your 70%-rule ceiling is about <b style={{color:C.orange}}>{money(ceiling)}</b>{ask>ceiling?' — that gap is the conversation.':' — asking is already inside your number.'}
+          Seller wants <b>{money(ask)}</b>. {cr?'Your comped walk-away is':<>With {flagged.length>0?'the repairs above':'repairs'} + your fee, your 70%-rule ceiling is about</>} <b style={{color:C.orange}}>{money(ceiling)}</b>{ask>ceiling?' — that gap is the conversation.':' — asking is already inside your number.'}
         </div>}
 
         {d.repair_notes && <div style={{marginBottom:8}}><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>Condition notes</div><div style={{color:C.cream,fontSize:13,lineHeight:1.5}}>{d.repair_notes}</div></div>}
@@ -506,8 +499,9 @@ function ScriptPanel({lead}){
   const repairsTxt = flagged.length ? flagged.map(r=>r[1].toLowerCase()).join(', ') : 'the repairs we talked about'
   const ammoTxt = flagged.length ? money(lo)+'–'+money(hi) : 'serious money'
   const arv = Number(lead.arv)||0
-  const ceiling = arv ? Math.max(0, Math.round(arv*0.70 - (flagged.length?hi:20000) - 15000)) : 0
-  const offerTxt = ceiling ? 'about '+money(ceiling) : '[your offer]'
+  const cr = compResult(lead)
+  const ceiling = cr ? cr.open : arv ? Math.max(0, Math.round(arv*0.70 - (flagged.length?hi:20000) - 15000)) : 0
+  const offerTxt = ceiling ? (cr?money(ceiling):'about '+money(ceiling)) : '[your offer]'
   const ask = Number(d.asking_price)||0
   const tl = d.timeline!=='Unsure' ? d.timeline : '30 days'
   const reason = d.sell_reason!=='Unknown' ? d.sell_reason.toLowerCase() : 'your situation'
@@ -651,77 +645,6 @@ function LogCall({lead,activity,reloadActivity}){
       </div>}
     </div>
   )
-}
-
-function CompingPage({leads,isMobile}){
-  const [arv,setArv] = useState('')
-  const [repairs,setRepairs] = useState('')
-  const [fee,setFee] = useState('15000')
-  const [address,setAddress] = useState('')
-
-  const arvN = Number(arv)||0
-  const repairsN = Number(repairs)||0
-  const feeN = Number(fee)||0
-  const mao = Math.max(0, Math.round(arvN*0.70 - repairsN - feeN))
-
-  function loadLead(l){
-    setAddress((l.address||'')+' '+l.city+' '+l.state)
-    setArv(String(l.arv||''))
-  }
-
-  return (
-    <div>
-      <h1 style={{fontFamily:'Georgia,serif',fontSize:isMobile?22:27,margin:0,fontWeight:600}}>Comping and Offer</h1>
-      <p style={{color:C.muted,margin:'3px 0 0',fontSize:isMobile?12.5:13.5,maxWidth:640}}>Run the 70% rule: Max Offer = (ARV x 0.70) - repairs - your assignment fee.</p>
-
-      <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'1fr 1fr',gap:16,marginTop:20,alignItems:'start'}}>
-        <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:22}}>
-          <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:1,marginBottom:16}}>Property and Numbers</div>
-          <Labeled label="Property address"><In ph="123 Main St, City ST" v={address} on={setAddress}/></Labeled>
-          <Labeled label="After Repair Value (ARV)"><In ph="421000" v={arv} on={setArv} type="number"/></Labeled>
-          <Labeled label="Estimated repairs"><In ph="35000" v={repairs} on={setRepairs} type="number"/></Labeled>
-          <Labeled label="Your assignment fee"><In ph="15000" v={fee} on={setFee} type="number"/></Labeled>
-          {leads.length>0 &&
-          <div style={{marginTop:16}}>
-            <div style={{color:C.muted,fontSize:12,marginBottom:8}}>Or pull from a lead:</div>
-            <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-              {leads.slice(0,6).map(l=>(
-                <button key={l.id} onClick={()=>loadLead(l)} style={{background:C.ink,border:'1px solid '+C.line,color:C.cream,borderRadius:8,padding:'7px 12px',fontSize:12,cursor:'pointer'}}>{l.name}</button>
-              ))}
-            </div>
-          </div>}
-        </div>
-
-        <div style={{display:'flex',flexDirection:'column',gap:16}}>
-          <div style={{background:'linear-gradient(135deg,'+C.orange+','+C.orangeSoft+')',borderRadius:16,padding:26,textAlign:'center'}}>
-            <div style={{color:C.ink,fontSize:12,textTransform:'uppercase',letterSpacing:1,fontWeight:800}}>Your Max Allowable Offer</div>
-            <div style={{color:C.ink,fontFamily:'Georgia,serif',fontSize:isMobile?38:46,fontWeight:800,margin:'6px 0 2px'}}>{money(mao)}</div>
-            <div style={{color:'rgba(8,16,25,0.7)',fontSize:12}}>{address||'Enter a property above'}</div>
-          </div>
-          <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:22}}>
-            <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:1,marginBottom:14}}>The Math</div>
-            <MathRow label="ARV" val={money(arvN)}/>
-            <MathRow label="x 70%" val={money(Math.round(arvN*0.70))}/>
-            <MathRow label="- Repairs" val={'-'+money(repairsN)}/>
-            <MathRow label="- Your fee" val={'-'+money(feeN)}/>
-            <div style={{height:1,background:C.line,margin:'12px 0'}}/>
-            <MathRow label="= Max offer" val={money(mao)} bold/>
-            <div style={{marginTop:16,padding:'12px 14px',background:C.ink,borderRadius:10,color:C.muted,fontSize:12,lineHeight:1.5}}>The 70% rule leaves room for your buyer profit and holding costs. Offer at or below this number to keep the deal attractive to cash buyers.</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function Labeled({label,children}){
-  return <div style={{marginBottom:14}}><div style={{color:C.muted,fontSize:12,marginBottom:5}}>{label}</div>{children}</div>
-}
-function MathRow({label,val,bold}){
-  return <div style={{display:'flex',justifyContent:'space-between',padding:'5px 0'}}>
-    <span style={{color:bold?C.cream:C.muted,fontSize:bold?15:13,fontWeight:bold?700:400}}>{label}</span>
-    <span style={{color:bold?C.orange:C.cream,fontSize:bold?18:13,fontWeight:bold?800:600}}>{val}</span>
-  </div>
 }
 
 function Signal({label,value,display,color}){
