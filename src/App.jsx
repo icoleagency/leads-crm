@@ -39,6 +39,14 @@ function freshLabel(f){ if(f>=90) return 'New · fresh'; if(f>=60) return 'Recen
 const BLANK = { name:'', address:'', city:'', state:'NJ', lead_type:'Lis Pendens',
   arv:'', owed:'', phone:'', freshness:100, times_contacted:0, motivation:50, skiptraced:false }
 
+function friendlyErr(msg){
+  const m = String(msg||'')
+  if(/failed to fetch|network|fetch/i.test(m)) return "Can't reach the database right now. It may still be waking up — give it a minute, then hit Retry."
+  if(/invalid login credentials/i.test(m)) return "Email or password didn't match. Try again."
+  if(/row-level security|permission denied|violates/i.test(m)) return "You don't have permission for that. Make sure you're signed in."
+  return m
+}
+
 const NAV = [
   ['leads','L','Leads + VA'],
   ['command','H','Command Center'],
@@ -53,17 +61,32 @@ export default function App(){
   const [menuOpen,setMenuOpen] = useState(false)
   const [leads,setLeads] = useState([])
   const [loading,setLoading] = useState(true)
+  const [err,setErr] = useState('')
+  const [session,setSession] = useState(null)
+  const [authReady,setAuthReady] = useState(false)
 
-  useEffect(()=>{ load() },[])
+  useEffect(()=>{
+    supabase.auth.getSession().then(({data})=>{ setSession(data.session); setAuthReady(true) })
+    const { data:sub } = supabase.auth.onAuthStateChange((_e,s)=>setSession(s))
+    return ()=>sub.subscription.unsubscribe()
+  },[])
+
+  useEffect(()=>{ if(session) load() },[session])
   async function load(){
     setLoading(true)
-    const { data, error } = await supabase.from('leads').select('*')
-    if(error){ alert('Load error: '+error.message) }
-    setLeads(data||[])
+    try{
+      const { data, error } = await supabase.from('leads').select('*')
+      if(error) throw error
+      setLeads(data||[]); setErr('')
+    }catch(e){ setErr(friendlyErr(e.message)) }
     setLoading(false)
   }
+  async function signOut(){ await supabase.auth.signOut(); setLeads([]) }
 
   const go = (p)=>{ setPage(p); setMenuOpen(false) }
+
+  if(!authReady) return <div style={{minHeight:'100vh',background:C.navy,display:'flex',alignItems:'center',justifyContent:'center',color:C.muted,fontFamily:'Helvetica Neue,Arial'}}>Loading...</div>
+  if(!session) return <Login/>
 
   return (
     <div style={{display:'flex',minHeight:'100vh',background:C.navy,fontFamily:'Helvetica Neue,Arial',color:C.cream}}>
@@ -84,6 +107,7 @@ export default function App(){
           <div style={{fontSize:12,marginTop:5}}>124 dials, 19 contacts</div>
           <div style={{color:C.green,fontSize:12}}>4 appointments set</div>
         </div>
+        <button onClick={signOut} style={{marginTop:10,background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'8px',fontSize:12,cursor:'pointer',width:'100%'}}>Sign out</button>
       </div>}
 
       <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column'}}>
@@ -99,15 +123,64 @@ export default function App(){
               <span style={{fontWeight:800,width:16}}>{i}</span>{l}
             </div>
           ))}
+          <div onClick={signOut} style={{color:C.muted,borderRadius:8,padding:'10px 12px',fontSize:13,fontWeight:600,cursor:'pointer'}}>Sign out</div>
         </div>}
 
         <div style={{padding:isMobile?'18px 16px':'26px 30px',width:'100%',maxWidth:1240,margin:0,boxSizing:'border-box'}}>
-          {page==='leads' && <LeadsPage leads={leads} loading={loading} reload={load} isMobile={isMobile}/>}
+          {err && <ErrorBanner msg={err} onRetry={load} onClose={()=>setErr('')}/>}
+          {page==='leads' && <LeadsPage leads={leads} loading={loading} reload={load} loadErr={err} isMobile={isMobile}/>}
           {page==='comping' && <CompingPage leads={leads} isMobile={isMobile}/>}
           {page==='academy' && <AcademyPage isMobile={isMobile}/>}
           {page==='command' && <CommandCenter leads={leads} isMobile={isMobile} goTo={go}/>}
           {page==='pipeline' && <Placeholder title="Pipeline" desc="Your leads as a drag-and-drop deal board: New Lead to Contact Made to Under Contract to Closing. Coming soon."/>}
         </div>
+      </div>
+    </div>
+  )
+}
+
+function Login(){
+  const [email,setEmail] = useState('')
+  const [pw,setPw] = useState('')
+  const [busy,setBusy] = useState(false)
+  const [err,setErr] = useState('')
+
+  async function signIn(){
+    if(!email.trim() || !pw){ setErr('Enter your email and password.'); return }
+    setBusy(true); setErr('')
+    try{
+      const { error } = await supabase.auth.signInWithPassword({ email:email.trim(), password:pw })
+      if(error) throw error
+    }catch(e){ setErr(friendlyErr(e.message)) }
+    setBusy(false)
+  }
+
+  return (
+    <div style={{minHeight:'100vh',background:C.navy,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'Helvetica Neue,Arial',padding:20}}>
+      <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:18,padding:'34px 30px',width:'100%',maxWidth:380,boxSizing:'border-box'}}>
+        <div style={{textAlign:'center',marginBottom:24}}>
+          <div style={{fontFamily:'Georgia,serif',fontSize:26,fontWeight:800,color:C.cream}}>WHOLESALE<span style={{color:C.orange}}>OS</span></div>
+          <div style={{color:C.muted,fontSize:9,letterSpacing:2,textTransform:'uppercase',marginTop:4}}>by Icole Agency</div>
+        </div>
+        <div style={{color:C.muted,fontSize:12,marginBottom:6}}>Email</div>
+        <input value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==='Enter'&&signIn()} type="email" placeholder="you@icoleagency.com" style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'11px 13px',color:C.cream,fontSize:14,outline:'none',width:'100%',boxSizing:'border-box',marginBottom:14}}/>
+        <div style={{color:C.muted,fontSize:12,marginBottom:6}}>Password</div>
+        <input value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==='Enter'&&signIn()} type="password" placeholder="••••••••" style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'11px 13px',color:C.cream,fontSize:14,outline:'none',width:'100%',boxSizing:'border-box'}}/>
+        {err && <div style={{background:C.red+'1e',border:'1px solid '+C.red+'55',color:C.red,borderRadius:8,padding:'10px 12px',fontSize:12.5,marginTop:14,lineHeight:1.45}}>{err}</div>}
+        <button onClick={signIn} disabled={busy} style={{marginTop:18,width:'100%',background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'13px',fontWeight:800,fontSize:14,cursor:busy?'default':'pointer',opacity:busy?0.7:1}}>{busy?'Signing in...':'Sign In'}</button>
+        <div style={{color:C.muted,fontSize:11,marginTop:16,textAlign:'center',lineHeight:1.5}}>Team accounts are created by your admin.<br/>No public sign-ups.</div>
+      </div>
+    </div>
+  )
+}
+
+function ErrorBanner({msg,onRetry,onClose}){
+  return (
+    <div style={{background:C.red+'1e',border:'1px solid '+C.red+'66',borderRadius:12,padding:'13px 16px',marginBottom:16,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+      <span style={{color:C.red,fontSize:13,flex:1,minWidth:200,lineHeight:1.45}}>{msg}</span>
+      <div style={{display:'flex',gap:8,flexShrink:0}}>
+        <button onClick={onRetry} style={{background:C.red,color:C.cream,border:'none',borderRadius:8,padding:'7px 14px',fontSize:12,fontWeight:700,cursor:'pointer'}}>Retry</button>
+        <button onClick={onClose} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'7px 12px',fontSize:12,cursor:'pointer'}}>Dismiss</button>
       </div>
     </div>
   )
@@ -126,11 +199,13 @@ function Placeholder({title,desc}){
   )
 }
 
-function LeadsPage({leads,loading,reload,isMobile}){
+function LeadsPage({leads,loading,reload,loadErr,isMobile}){
   const [selId,setSelId] = useState(null)
   const [showAdd,setShowAdd] = useState(false)
   const [form,setForm] = useState(BLANK)
   const [filter,setFilter] = useState('All')
+  const [formErr,setFormErr] = useState('')
+  const [saving,setSaving] = useState(false)
 
   const ranked = [...leads].sort((a,b)=>scoreOf(b)-scoreOf(a))
   const shown = ranked.filter(l=> filter==='All' || l.state===filter)
@@ -138,15 +213,23 @@ function LeadsPage({leads,loading,reload,isMobile}){
   const set = (k,v)=> setForm({...form,[k]:v})
 
   async function add(){
-    if(!form.name.trim()){ alert('Add a name'); return }
-    const payload = {...form, arv:Number(form.arv)||0, owed:Number(form.owed)||0}
-    const { error } = await supabase.from('leads').insert([payload])
-    if(error){ alert(error.message); return }
-    setForm(BLANK); setShowAdd(false); reload()
+    if(!form.name.trim()){ setFormErr('Add an owner name before saving.'); return }
+    setSaving(true); setFormErr('')
+    try{
+      const payload = {...form, arv:Number(form.arv)||0, owed:Number(form.owed)||0}
+      const { error } = await supabase.from('leads').insert([payload])
+      if(error) throw error
+      setForm(BLANK); setShowAdd(false); reload()
+    }catch(e){ setFormErr(friendlyErr(e.message)) }
+    setSaving(false)
   }
   async function remove(id){
-    await supabase.from('leads').delete().eq('id',id)
-    setSelId(null); reload()
+    if(!confirm('Delete this lead? This cannot be undone.')) return
+    try{
+      const { error } = await supabase.from('leads').delete().eq('id',id)
+      if(error) throw error
+      setSelId(null); reload()
+    }catch(e){ setFormErr(friendlyErr(e.message)) }
   }
 
   return (
@@ -179,7 +262,8 @@ function LeadsPage({leads,loading,reload,isMobile}){
         <label style={{display:'flex',gap:8,alignItems:'center',marginTop:14,fontSize:13,color:C.muted}}>
           <input type="checkbox" checked={form.skiptraced} onChange={e=>set('skiptraced',e.target.checked)}/> Skip-trace confirmed
         </label>
-        <button onClick={add} style={{marginTop:16,background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'11px 22px',fontWeight:800,cursor:'pointer'}}>Save Lead</button>
+        {formErr && <div style={{background:C.red+'1e',border:'1px solid '+C.red+'55',color:C.red,borderRadius:8,padding:'10px 12px',fontSize:12.5,marginTop:14,lineHeight:1.45}}>{formErr}</div>}
+        <button onClick={add} disabled={saving} style={{marginTop:16,background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'11px 22px',fontWeight:800,cursor:saving?'default':'pointer',opacity:saving?0.7:1}}>{saving?'Saving...':'Save Lead'}</button>
       </div>}
 
       <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap'}}>
@@ -189,6 +273,7 @@ function LeadsPage({leads,loading,reload,isMobile}){
       </div>
 
       {loading ? <p style={{color:C.muted}}>Loading...</p> :
+       loadErr && shown.length===0 ? <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:14,padding:30,color:C.muted}}>Couldn't load your leads — see the message above, then hit Retry.</div> :
        shown.length===0 ? <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:14,padding:30,color:C.muted}}>No leads yet - tap "+ Add Lead" to start.</div> :
       <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'280px 1fr',gap:16,alignItems:'start'}}>
         <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:14}}>
