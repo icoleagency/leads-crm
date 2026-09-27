@@ -3,7 +3,7 @@ import { supabase } from './supabaseClient'
 import AcademyPage from './AcademyPage'
 import CommandCenter from './CommandCenter'
 import KpiPage from './KpiPage'
-import { REPAIRS, BLANK_DETAILS, detailsOf, money, eqOf, scoreOf, stageOf, STAGE } from './leadModel'
+import { REPAIRS, BLANK_DETAILS, detailsOf, money, callbackOf, callbackState, eqOf, scoreOf, stageOf, STAGE } from './leadModel'
 import Pipeline from './Pipeline'
 import { CallCard, ScriptPanel, LogCall, HandoffPanel } from './LeadPanels'
 import VaWorkspace from './VaWorkspace'
@@ -322,6 +322,7 @@ function LeadsPage({leads,campaigns=[],loading,reload,reloadQuiet,loadErr,activi
                   <div style={{color:C.muted,fontSize:11,marginTop:3}}>{l.city}, {l.state} - {l.lead_type}</div>
                   <div style={{display:'flex',gap:6,marginTop:8,flexWrap:'wrap'}}>
                     {(()=>{ const st=stageOf(l,activity); return st!=='new' ? <Tag c={STAGE[st].c}>{STAGE[st].l}</Tag> : null })()}
+                    {(()=>{ const cs=callbackState(callbackOf(l)); return cs && cs!=='later' ? <Tag c={cs==='overdue'?C.red:C.amber}>{cs==='overdue'?'Callback overdue':'Callback today'}</Tag> : null })()}
                     {campaignOf(l) && campaignName(campaigns,campaignOf(l)) && <Tag c={C.muted}>{campaignName(campaigns,campaignOf(l))}</Tag>}
                     <Tag c={C.blue}>{freshLabel(l.freshness)}</Tag>
                     {l.times_contacted===0? <Tag c={C.green}>Never called</Tag> : <Tag c={l.times_contacted<=1?C.amber:C.red}>{l.times_contacted}x called</Tag>}

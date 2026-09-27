@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { REPAIRS, detailsOf, money, compResult, stageOf, stageIdx, STAGE, OUTCOME_STAGE, moveStage, patchLead } from './leadModel'
+import { REPAIRS, detailsOf, money, compResult, stageOf, stageIdx, STAGE, OUTCOME_STAGE, moveStage, patchLead, callbackOf, callbackState, fmtWhen } from './leadModel'
 import { OUTCOMES, OUTCOME, logActivity, activityErr, getCaller, saveCaller } from './activity'
 
 // Shared lead panels used on both the Leads page and the VA Workspace.
@@ -13,6 +13,7 @@ const C = {
 export function HandoffPanel({lead,reloadLeads}){
   const h = (lead.details && lead.details.handoff) || null
   const [note,setNote] = useState('')
+  const [reply,setReply] = useState('')
   const [busy,setBusy] = useState(false)
   const [err,setErr] = useState('')
   async function save(patch){
@@ -32,13 +33,17 @@ export function HandoffPanel({lead,reloadLeads}){
           <div style={{color:C.amber,fontSize:12,fontWeight:700}}>Waiting on the closer · handed off by {h.by} · {when(h.at)}</div>
           {h.note && <div style={{color:C.cream,fontSize:13.5,lineHeight:1.5,marginTop:6}}>{h.note}</div>}
         </div>
+        <textarea value={reply} onChange={e=>setReply(e.target.value)} rows={2} placeholder={'Reply to '+(h.by||'the VA')+' (optional) — e.g. Offered $140k, she is thinking it over'} style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'9px 11px',color:C.cream,fontSize:13,outline:'none',width:'100%',boxSizing:'border-box',resize:'vertical',fontFamily:'inherit',marginTop:10}}/>
         <div style={{display:'flex',gap:8,marginTop:10}}>
-          <button disabled={busy} onClick={()=>save({...h,status:'done',done_at:new Date().toISOString()})} style={{background:C.green,color:C.ink,border:'none',borderRadius:8,padding:'8px 14px',fontSize:12,fontWeight:800,cursor:'pointer'}}>Mark handled</button>
+          <button disabled={busy} onClick={()=>save({...h,status:'done',done_at:new Date().toISOString(),reply:reply.trim()||null})} style={{background:C.green,color:C.ink,border:'none',borderRadius:8,padding:'8px 14px',fontSize:12,fontWeight:800,cursor:'pointer'}}>Mark handled</button>
           <button disabled={busy} onClick={()=>save(null)} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'8px 14px',fontSize:12,cursor:'pointer'}}>Cancel hand-off</button>
         </div>
       </div> :
       <div>
-        {h && h.status==='done' && <div style={{color:C.green,fontSize:12,marginBottom:10}}>Last hand-off from {h.by} was handled {when(h.done_at)}.</div>}
+        {h && h.status==='done' && <div style={{background:C.green+'12',border:'1px solid '+C.green+'44',borderRadius:10,padding:'9px 12px',marginBottom:12,fontSize:12.5,lineHeight:1.45}}>
+          <div style={{color:C.green,fontWeight:700}}>Last hand-off from {h.by} was handled {when(h.done_at)}</div>
+          {h.reply && <div style={{color:C.cream,marginTop:3}}>Closer: {h.reply}</div>}
+        </div>}
         <div style={{color:C.muted,fontSize:12.5,lineHeight:1.5,marginBottom:10}}>Seller is motivated or an appointment is set? Send it to the closer with what they need to know.</div>
         <textarea value={note} onChange={e=>setNote(e.target.value)} rows={3} placeholder="e.g. Wants out in 30 days, roof leaks, open to $140k. Call her after 5pm." style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'10px 12px',color:C.cream,fontSize:13,outline:'none',width:'100%',boxSizing:'border-box',resize:'vertical',fontFamily:'inherit'}}/>
         <button disabled={busy||!note.trim()} onClick={()=>save({status:'open',by:getCaller()||'VA',note:note.trim(),at:new Date().toISOString()})} style={{marginTop:10,background:C.orange,color:C.ink,border:'none',borderRadius:8,padding:'9px 16px',fontSize:12.5,fontWeight:800,cursor:(busy||!note.trim())?'default':'pointer',opacity:(busy||!note.trim())?0.5:1}}>Hand off to closer</button>
@@ -75,6 +80,12 @@ export function CallCard({lead,onEdit,onAnalyze}){
         </div>
       </div>
 
+      {(()=>{ const cbk=callbackOf(lead), st=callbackState(cbk); if(!st) return null
+        const col = st==='overdue'?C.red:st==='today'?C.amber:C.blue
+        return <div style={{background:col+'14',border:'1px solid '+col+'55',borderRadius:10,padding:'9px 12px',marginBottom:12,fontSize:12.5,lineHeight:1.45}}>
+          <b style={{color:col}}>{st==='overdue'?'Callback overdue':st==='today'?'Callback today':'Callback scheduled'}</b> <span style={{color:C.cream}}>· {fmtWhen(cbk.at)}{cbk.by?' · set by '+cbk.by:''}</span>
+          {cbk.note && <div style={{color:C.muted,marginTop:2}}>{cbk.note}</div>}
+        </div> })()}
       {cr &&
       <div style={{background:C.ink,borderRadius:10,padding:'11px 14px',marginBottom:12,display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
         <div><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>ARV{cr.confidence?' · '+cr.confidence:''}</div><div style={{color:C.cream,fontSize:14,fontWeight:700,marginTop:3}}>{money(cr.arv)}</div></div>
@@ -238,7 +249,13 @@ export function LogCall({lead,activity,reloadActivity,reloadLeads,onNext}){
   const [amount,setAmount] = useState('')
   const [busy,setBusy] = useState(false)
   const [msg,setMsg] = useState(null)
+  const [cb,setCb] = useState('')          // ISO time for a new callback, '' = none
+  const [cbPick,setCbPick] = useState(false)
   const history = activity.filter(a=>a.lead_id===String(lead.id)).slice(0,6)
+  const existingCb = callbackOf(lead)
+  const at = (days,h) => { const d=new Date(); d.setDate(d.getDate()+days); d.setHours(h,0,0,0); return d.toISOString() }
+  const PRESETS = [['Tomorrow 10am',()=>at(1,10)],['Tomorrow 5pm',()=>at(1,17)],['In 3 days',()=>at(3,10)],['Next week',()=>at(7,10)]]
+  const toLocalInput = iso => { const d=new Date(iso); const p=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes()) }
 
   async function submit(outcome){
     const o = OUTCOME[outcome]
@@ -254,12 +271,16 @@ export function LogCall({lead,activity,reloadActivity,reloadLeads,onNext}){
         const prevDeal = (lead.details && lead.details.deal) || {}
         if(outcome==='closed' && Number(amount)) extra.deal = {...prevDeal, fee:Number(amount), closing_date:prevDeal.closing_date||new Date().toISOString().slice(0,10)}
         if(outcome==='offer' && Number(amount)) extra.deal = {...prevDeal, last_offer:Number(amount)}
+        // A new callback replaces the old one; logging any call without one completes the old one.
+        if(cb && outcome!=='dead') extra.callback = { at:cb, by:caller||'VA', note:note.trim()||null, set_at:new Date().toISOString() }
+        else if(existingCb) extra.callback = null
         const forward = target && (target==='dead' ? cur!=='dead' : stageIdx(target)>stageIdx(cur))
         if(forward){ await moveStage(lead, target, extra); moved = ' · moved to '+STAGE[target].l+' in Pipeline' }
-        else if(extra.deal){ await patchLead(lead, extra) }
-        if((forward || extra.deal) && reloadLeads) reloadLeads()
+        else if(Object.keys(extra).length){ await patchLead(lead, extra) }
+        if(extra.callback) moved += ' · callback set for '+fmtWhen(extra.callback.at)
+        if((forward || Object.keys(extra).length) && reloadLeads) reloadLeads()
       }catch{ moved = ' · (pipeline stage not updated — try moving it on the Pipeline page)' }
-      setMsg({ok:true,t:'Logged: '+o.label+moved}); setNote(''); setPending(null); setAmount('')
+      setMsg({ok:true,t:'Logged: '+o.label+moved}); setNote(''); setPending(null); setAmount(''); setCb(''); setCbPick(false)
       reloadActivity()
     }catch(e){ setMsg({ok:false,t:activityErr(e.message)}) }
     setBusy(false)
@@ -274,7 +295,17 @@ export function LogCall({lead,activity,reloadActivity,reloadLeads,onNext}){
           <input value={caller} onChange={e=>setCaller(e.target.value)} onBlur={()=>saveCaller(caller)} placeholder="your name" style={{background:C.ink,border:'1px solid '+C.line,borderRadius:6,padding:'5px 8px',color:C.cream,fontSize:12,outline:'none',width:110}}/>
         </label>
       </div>
-      <input value={note} onChange={e=>setNote(e.target.value)} placeholder="Quick note (optional) — e.g. call back Tue after 5" style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'9px 12px',color:C.cream,fontSize:13,outline:'none',width:'100%',boxSizing:'border-box',marginBottom:10}}/>
+      <input value={note} onChange={e=>setNote(e.target.value)} placeholder="Quick note (optional) — e.g. wife decides, call after 5" style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'9px 12px',color:C.cream,fontSize:13,outline:'none',width:'100%',boxSizing:'border-box',marginBottom:10}}/>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
+        <span style={{color:C.muted,fontSize:11.5,marginRight:2}}>Callback:</span>
+        {PRESETS.map(([l,f])=>{ const v=f(); const on=cb===v; return (
+          <button key={l} onClick={()=>{ setCb(on?'':v); setCbPick(false) }} style={{background:on?C.blue:'transparent',color:on?C.ink:C.muted,border:'1px solid '+(on?C.blue:C.line),borderRadius:14,padding:'4px 10px',fontSize:11.5,fontWeight:600,cursor:'pointer'}}>{l}</button>
+        )})}
+        <button onClick={()=>{ setCbPick(!cbPick); if(!cbPick && !cb) setCb(at(1,10)) }} style={{background:cbPick?C.blue:'transparent',color:cbPick?C.ink:C.muted,border:'1px solid '+(cbPick?C.blue:C.line),borderRadius:14,padding:'4px 10px',fontSize:11.5,fontWeight:600,cursor:'pointer'}}>Pick…</button>
+        {cbPick && <input type="datetime-local" value={cb?toLocalInput(cb):''} onChange={e=>setCb(e.target.value?new Date(e.target.value).toISOString():'')} style={{background:C.ink,border:'1px solid '+C.blue,borderRadius:8,padding:'5px 8px',color:C.cream,fontSize:12,colorScheme:'dark'}}/>}
+      </div>
+      {cb && <div style={{color:C.blue,fontSize:12,marginBottom:10}}>Callback will be set for <b>{fmtWhen(cb)}</b> when you log the outcome below.</div>}
+      {!cb && existingCb && <div style={{color:C.muted,fontSize:11.5,marginBottom:10}}>Logging this call completes the callback that was set for {fmtWhen(existingCb.at)}.</div>}
       <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
         {OUTCOMES.map(o=>(
           <button key={o.key} disabled={busy} onClick={()=>submit(o.key)} style={{background:pending===o.key?C.orange:C.ink,color:pending===o.key?C.ink:(o.key==='dead'?C.muted:C.cream),border:'1px solid '+(pending===o.key?C.orange:C.line),borderRadius:8,padding:'8px 11px',fontSize:12,fontWeight:600,cursor:busy?'default':'pointer'}}>{o.label}</button>

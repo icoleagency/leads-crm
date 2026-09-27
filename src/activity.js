@@ -66,3 +66,13 @@ export function activityErr(msg){
   if(/failed to fetch|network/i.test(m)) return "Can't reach the database right now — give it a minute, then retry."
   return m
 }
+
+// Per-day totals for the last n days (oldest first), for charts.
+export function dailySeries(rows, n){
+  const dayStart = startOfDay().getTime()
+  return Array.from({length:n},(_,i)=>{
+    const s = dayStart - (n-1-i)*DAY, e = s+DAY
+    const t = tally(rows.filter(a=>{ const x=new Date(a.created_at).getTime(); return x>=s && x<e }))
+    return { d:new Date(s), dials:t.dials, contacts:t.contacts, offers:t.offer }
+  })
+}

@@ -27,11 +27,13 @@ const ASSIGN_FEE = 15000
 
 export default function CommandCenter({leads,activity=[],reload,openLead,isMobile,goTo}){
   const [busyId,setBusyId] = useState(null)
+  const [replyFor,setReplyFor] = useState(null)
+  const [replyText,setReplyText] = useState('')
   const handoffs = leads.filter(l=>openHandoff(l)).sort((a,b)=>new Date(a.details.handoff.at)-new Date(b.details.handoff.at))
   async function handled(l){
     setBusyId(l.id)
-    try{ await patchLead(l,{handoff:{...l.details.handoff,status:'done',done_at:new Date().toISOString()}}); if(reload) await reload() }catch{ /* shown as still open */ }
-    setBusyId(null)
+    try{ await patchLead(l,{handoff:{...l.details.handoff,status:'done',done_at:new Date().toISOString(),reply:replyText.trim()||null}}); if(reload) await reload() }catch{ /* shown as still open */ }
+    setBusyId(null); setReplyFor(null); setReplyText('')
   }
   const [academyPct,setAcademyPct] = useState(0)
   const today = tally(inLastDays(activity,1))
@@ -77,8 +79,13 @@ export default function CommandCenter({leads,activity=[],reload,openLead,isMobil
             </div>
             <div style={{display:'flex',gap:6,flexShrink:0}}>
               <button onClick={()=>openLead&&openLead(l.id)} style={{background:C.orange,color:C.ink,border:'none',borderRadius:8,padding:'7px 13px',fontSize:12,fontWeight:800,cursor:'pointer'}}>Open lead</button>
-              <button disabled={busyId===l.id} onClick={()=>handled(l)} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'7px 12px',fontSize:12,cursor:'pointer'}}>Handled</button>
+              <button onClick={()=>{ setReplyFor(replyFor===l.id?null:l.id); setReplyText('') }} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'7px 12px',fontSize:12,cursor:'pointer'}}>Handled</button>
             </div>
+            {replyFor===l.id &&
+            <div style={{flexBasis:'100%',display:'flex',gap:6,marginTop:4}}>
+              <input autoFocus value={replyText} onChange={e=>setReplyText(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handled(l)} placeholder={'Reply to '+h.by+' (optional) — what happened?'} style={{flex:1,minWidth:0,background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'8px 11px',color:C.cream,fontSize:12.5,outline:'none'}}/>
+              <button disabled={busyId===l.id} onClick={()=>handled(l)} style={{background:C.green,color:C.ink,border:'none',borderRadius:8,padding:'0 14px',fontSize:12,fontWeight:800,cursor:'pointer',whiteSpace:'nowrap'}}>Save & close</button>
+            </div>}
           </div>
         )})}
       </div>}

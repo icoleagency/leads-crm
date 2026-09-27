@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { OUTCOME, TARGETS, inLastDays, tally, pct, startOfDay } from './activity'
+import DailyBars from './DailyBars'
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -145,7 +146,7 @@ export default function KpiPage({leads=[],campaigns=[],activity,actErr,reload,is
         <div style={card}>
           <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>Dials per day <span style={{color:C.muted,fontWeight:400,fontSize:12}}>— last 14 days</span></div>
           <div style={{color:C.muted,fontSize:11,marginBottom:10}}>Hover a bar for contacts and offers · dashed line = {TARGETS.dials}-dial target</div>
-          <DailyBars series={series} max={Math.max(smax,TARGETS.dials*1.1)}/>
+          <DailyBars series={series} max={Math.max(smax,TARGETS.dials*1.1)} goal={TARGETS.dials}/>
         </div>
       </div>
 
@@ -176,43 +177,6 @@ export default function KpiPage({leads=[],campaigns=[],activity,actErr,reload,is
         ))}
       </div>
     </div>
-  )
-}
-
-function DailyBars({series,max}){
-  const W=560, H=170, pl=26, pb=22, pt=6
-  const iw=W-pl, ih=H-pb-pt
-  const bw = iw/series.length
-  const y = v => pt + ih - (v/max)*ih
-  const ticks = [0, Math.round(max/2), Math.round(max)]
-  const tgtY = y(TARGETS.dials)
-  return (
-    <svg viewBox={'0 0 '+W+' '+H} style={{width:'100%',height:'auto',display:'block'}} role="img" aria-label="Dials per day, last 14 days">
-      {ticks.map(v=>(
-        <g key={v}>
-          <line x1={pl} x2={W} y1={y(v)} y2={y(v)} stroke={C.line} strokeWidth="1"/>
-          <text x={pl-6} y={y(v)+3} textAnchor="end" fontSize="10" fill={C.muted}>{v}</text>
-        </g>
-      ))}
-      <line x1={pl} x2={W} y1={tgtY} y2={tgtY} stroke={C.muted} strokeWidth="1" strokeDasharray="4 4"/>
-      {series.map((s,i)=>{
-        const x = pl + i*bw + 2, w = Math.max(2, bw-4)
-        const top = y(s.dials), h = pt+ih-top
-        const r = Math.min(4, w/2, h)
-        const path = h>0 ? `M${x},${pt+ih} L${x},${top+r} Q${x},${top} ${x+r},${top} L${x+w-r},${top} Q${x+w},${top} ${x+w},${top+r} L${x+w},${pt+ih} Z` : ''
-        const label = s.d.toLocaleDateString([], {weekday:'short',month:'short',day:'numeric'})
-        const isToday = i===series.length-1
-        return (
-          <g key={i}>
-            <rect x={pl+i*bw} y={pt} width={bw} height={ih} fill="transparent">
-              <title>{label}: {s.dials} dials · {s.contacts} contacts · {s.offers} offers</title>
-            </rect>
-            {path && <path d={path} fill={C.orange} opacity={isToday?1:0.8} pointerEvents="none"/>}
-            {(i%2===1 || isToday) && <text x={pl+i*bw+bw/2} y={H-6} textAnchor="middle" fontSize="10" fill={isToday?C.cream:C.muted}>{isToday?'Today':s.d.getDate()}</text>}
-          </g>
-        )
-      })}
-    </svg>
   )
 }
 

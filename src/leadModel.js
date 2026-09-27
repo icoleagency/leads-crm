@@ -95,3 +95,15 @@ export function scoreOf(l){
   return Math.round(fresh*0.25 + contact*0.25 + mot*0.2 + eq*0.15 + skip*0.15)
 }
 export const gradeLetter = s => s>=80?'A':s>=65?'B':s>=50?'C':'D'
+
+// ---------- Callbacks ----------
+export function callbackOf(l){ const c = l && l.details && l.details.callback; return c && c.at ? c : null }
+// 'overdue' | 'today' | 'later' | null
+export function callbackState(cb){
+  if(!cb) return null
+  const t = new Date(cb.at).getTime(); if(isNaN(t)) return null
+  const end = new Date(); end.setHours(23,59,59,999)
+  return t < Date.now() ? 'overdue' : t <= end.getTime() ? 'today' : 'later'
+}
+export const fmtWhen = iso => new Date(iso).toLocaleString([], {weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})
+export const fmtTime = iso => new Date(iso).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})

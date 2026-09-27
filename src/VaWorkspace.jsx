@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { STAGE, stageOf, scoreOf, gradeLetter, patchLead } from './leadModel'
-import { tally, inLastDays, pct, saveCaller } from './activity'
+import { STAGE, stageOf, scoreOf, gradeLetter, patchLead, callbackOf, callbackState, fmtWhen, fmtTime, money } from './leadModel'
+import { tally, inLastDays, pct, saveCaller, dailySeries, OUTCOME } from './activity'
+import DailyBars from './DailyBars'
 import { saveCampaign, deleteCampaign, saveMember, deleteMember, campaignOf, campaignName, openHandoff } from './team'
 import { CallCard, ScriptPanel, LogCall, HandoffPanel, IntelEditor } from './LeadPanels'
 
@@ -17,6 +18,7 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
   const [work,setWork] = useState(null)   // { ids:[lead ids in list order], i:index } while working leads
   const [showManage,setShowManage] = useState(false)
   const [showAll,setShowAll] = useState(false)
+  const [histFor,setHistFor] = useState('')
   const me = team.find(m=>String(m.id)===meId) || null
   const ownerView = meId==='owner' || !me
 
@@ -57,10 +59,18 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
   const callCount = id => activity.filter(a=>a.lead_id===String(id)).length
   const queue = !me ? [] : leads
     .filter(l=>myCamps.includes(campaignOf(l)) && !CLOSED_STAGES.includes(stageOf(l,activity)) && !openHandoff(l))
-    .map(l=>({ l, s:scoreOf(l), n:callCount(l.id), last:lastCall(l.id) }))
-    .sort((a,b)=> (a.n===0)!==(b.n===0) ? (a.n===0?-1:1) : b.s-a.s)
+    .map(l=>{ const cb=callbackOf(l), cs=callbackState(cb), n=callCount(l.id)
+      // 0 = callback due now, 1 = never called, 2 = called before, 3 = callback later
+      const bucket = cs==='overdue'||cs==='today' ? 0 : cs==='later' ? 3 : n===0 ? 1 : 2
+      return { l, s:scoreOf(l), n, last:lastCall(l.id), cb, cs, bucket } })
+    .sort((a,b)=> a.bucket!==b.bucket ? a.bucket-b.bucket
+      : (a.bucket===0||a.bucket===3) ? new Date(a.cb.at)-new Date(b.cb.at) : b.s-a.s)
+  const dueCount = queue.filter(x=>x.bucket===0).length, overdueCount = queue.filter(x=>x.cs==='overdue').length
   const shown = showAll ? queue : queue.slice(0,25)
-  const myHandoffs = me ? leads.filter(l=>{ const h=l.details&&l.details.handoff; return h && h.by===me.name }) : []
+  const myHandoffs = me ? leads.filter(l=>{ const h=l.details&&l.details.handoff; return h && h.by===me.name })
+    .sort((a,b)=>{ const ha=a.details.handoff, hb=b.details.handoff; if((ha.status==='open')!==(hb.status==='open')) return ha.status==='open'?-1:1
+      return new Date(hb.done_at||hb.at)-new Date(ha.done_at||ha.at) }) : []
+  const isNewReply = h => h.status==='done' && h.reply && (Date.now()-new Date(h.done_at).getTime()) < 3*86400000
 
   const Stat = ({label,v,goal,sub}) => {
     const p = goal ? Math.min(100,pct(v,goal)) : null
@@ -125,11 +135,12 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
                   myCamps.map(id=><span key={id} style={{background:C.blue+'1e',color:C.blue,border:'1px solid '+C.blue+'55',borderRadius:10,padding:'2px 8px',fontSize:11,fontWeight:700}}>{campaignName(campaigns,id)||'?'}</span>)}
               </div>
             </div>
-            <div style={{color:C.muted,fontSize:11.5,marginBottom:10}}>Never-called leads first, then by lead grade. Tap a lead to open its Call Card and script.</div>
+            <div style={{color:C.muted,fontSize:11.5,marginBottom:10}}>Callbacks due first, then never-called leads, then by lead grade. Tap a lead to open its Call Card and script.</div>
+            {dueCount>0 && <div style={{background:(overdueCount?C.red:C.amber)+'14',border:'1px solid '+(overdueCount?C.red:C.amber)+'55',borderRadius:10,padding:'9px 12px',marginBottom:10,fontSize:12.5,color:C.cream}}><b style={{color:overdueCount?C.red:C.amber}}>{dueCount} callback{dueCount===1?'':'s'} due today</b>{overdueCount?' · '+overdueCount+' overdue':''} — they're at the top of your list.</div>}
             {queue.length===0 ? <div style={{color:C.muted,fontSize:13,padding:'8px 0'}}>{myCamps.length?'Nothing to call in your counties right now. Ask for a new list, or check that leads have a campaign set.':'Ask your manager to assign you to a county.'}</div> :
             <div>
               <button onClick={()=>{ setWork({ ids:queue.map(x=>x.l.id), i:0 }); window.scrollTo({top:0}) }} style={{width:'100%',background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'11px',fontWeight:800,fontSize:13,cursor:'pointer',marginBottom:8}}>Start working my list →</button>
-              {shown.map(({l,s,n,last})=>{
+              {shown.map(({l,s,n,last,cb,cs})=>{
                 const g = gradeLetter(s), st = stageOf(l,activity)
                 return (
                   <div key={l.id} onClick={()=>{ setWork({ ids:queue.map(x=>x.l.id), i:queue.findIndex(x=>x.l.id===l.id) }); window.scrollTo({top:0}) }} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 6px',borderBottom:'1px solid '+C.line,cursor:'pointer'}}>
@@ -139,7 +150,8 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
                       <div style={{color:C.muted,fontSize:11.5,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{[l.address,l.city].filter(Boolean).join(', ')} · {l.lead_type}</div>
                     </div>
                     <div style={{textAlign:'right',flexShrink:0}}>
-                      {st!=='new' && <div style={{color:STAGE[st].c,fontSize:11,fontWeight:700}}>{STAGE[st].l}</div>}
+                      {cs ? <div style={{color:cs==='overdue'?C.red:cs==='today'?C.amber:C.blue,fontSize:11,fontWeight:700}}>{cs==='overdue'?'Callback overdue':cs==='today'?'Callback '+fmtTime(cb.at):'Callback '+new Date(cb.at).toLocaleDateString([], {month:'short',day:'numeric'})}</div>
+                        : st!=='new' && <div style={{color:STAGE[st].c,fontSize:11,fontWeight:700}}>{STAGE[st].l}</div>}
                       <div style={{color:n?C.muted:C.green,fontSize:11}}>{n ? n+' call'+(n===1?'':'s')+(last?' · last '+new Date(last.created_at).toLocaleDateString([], {month:'short',day:'numeric'}):'') : 'never called'}</div>
                     </div>
                   </div>
@@ -156,13 +168,15 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
               <div key={l.id} onClick={()=>{ setWork({ ids:[l.id], i:0 }); window.scrollTo({top:0}) }} style={{padding:'8px 0',borderBottom:'1px solid '+C.line,cursor:'pointer'}}>
                 <div style={{display:'flex',justifyContent:'space-between',gap:8}}>
                   <span style={{fontWeight:600,fontSize:13}}>{l.name}</span>
-                  <span style={{fontSize:11,fontWeight:700,color:h.status==='open'?C.amber:C.green}}>{h.status==='open'?'Waiting on closer':'Handled'}</span>
+                  <span style={{fontSize:11,fontWeight:700,color:h.status==='open'?C.amber:C.green,whiteSpace:'nowrap'}}>{h.status==='open'?'Waiting on closer':isNewReply(h)?'New reply':'Handled'}</span>
                 </div>
-                {h.note && <div style={{color:C.muted,fontSize:12,marginTop:2}}>{h.note}</div>}
+                {h.note && <div style={{color:C.muted,fontSize:12,marginTop:2}}>You: {h.note}</div>}
+                {h.status==='done' && h.reply && <div style={{color:C.cream,fontSize:12.5,marginTop:4,borderLeft:'3px solid '+C.green,paddingLeft:8,lineHeight:1.4}}>Closer: {h.reply}</div>}
               </div>
             )})}
           </div>
         </div>
+        <Performance member={me} activity={activity} leads={leads} onOpen={id=>{ setWork({ ids:[id], i:0 }); window.scrollTo({top:0}) }} isMobile={isMobile}/>
       </div>}
 
       {ownerView && team.length>0 &&
@@ -190,10 +204,71 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
         </div>
       </div>}
 
+      {ownerView && team.length>0 && (()=>{ const m = team.find(x=>String(x.id)===histFor) || board[0]?.m
+        return m && <div>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginTop:16,flexWrap:'wrap'}}>
+            <span style={{color:C.muted,fontSize:12.5}}>30-day history for</span>
+            <select value={String(m.id)} onChange={e=>setHistFor(e.target.value)} style={sel}>{team.map(x=><option key={x.id} value={String(x.id)}>{x.name}</option>)}</select>
+          </div>
+          <Performance member={m} activity={activity} leads={leads} isMobile={isMobile}/>
+        </div> })()}
+
       {ownerView && <div style={{marginTop:16}}>
         <button onClick={()=>setShowManage(!showManage)} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'8px 14px',fontSize:12.5,fontWeight:600,cursor:'pointer'}}>{showManage?'Hide':'Manage'} team & campaigns</button>
       </div>}
       {ownerView && showManage && <Manage leads={leads} campaigns={campaigns} team={team} reloadTeam={reloadTeam} reloadLeads={reloadLeads} isMobile={isMobile}/>}
+    </div>
+  )
+}
+
+function Performance({member,activity,leads,onOpen,isMobile}){
+  const [showAll,setShowAll] = useState(false)
+  const mine = activity.filter(a=>(a.caller||'')===member.name)
+  const rows = inLastDays(mine,30)
+  const t = tally(rows)
+  const series = dailySeries(mine,30)
+  const worked = series.filter(d=>d.dials>0)
+  const hit = worked.filter(d=>d.dials>=member.dial_goal).length
+  const handoffs = leads.filter(l=>{ const h=l.details&&l.details.handoff; return h && h.by===member.name && (Date.now()-new Date(h.at).getTime())<30*86400000 }).length
+  const smax = Math.max(4, ...series.map(d=>d.dials), member.dial_goal*1.1)
+  const card = {background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:20,minWidth:0}
+  const tiles = [
+    ['Dials (30d)', t.dials, worked.length+' day'+(worked.length===1?'':'s')+' worked'],
+    ['Avg per day worked', worked.length?Math.round(t.dials/worked.length):0, 'goal '+member.dial_goal],
+    ['Days at goal', hit+' / '+worked.length, worked.length?pct(hit,worked.length)+'% of days worked':'—'],
+    ['Contact rate', pct(t.contacts,t.dials)+'%', t.contacts+' contacts'],
+    ['Appointments', t.appointment, null],
+    ['Offers', t.offer, t.offerCount?'avg '+money(t.offerSum/t.offerCount):null],
+    ['Contracts', t.contract, null],
+    ['Hand-offs', handoffs, null],
+  ]
+  const list = showAll ? rows : rows.slice(0,15)
+  const leadName = id => (leads.find(l=>String(l.id)===String(id))||{}).name
+  return (
+    <div style={{...card,marginTop:14}}>
+      <div style={{fontWeight:700,fontSize:14,marginBottom:12}}>{onOpen?'My last 30 days':member.name+' — last 30 days'}</div>
+      <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(8,minmax(0,1fr))',gap:8}}>
+        {tiles.map(([l,v,sub])=>(
+          <div key={l} style={{background:C.ink,borderRadius:10,padding:'10px 11px',minWidth:0}}>
+            <div style={{color:C.muted,fontSize:10.5}}>{l}</div>
+            <div style={{fontSize:18,fontWeight:700,marginTop:3}}>{v}</div>
+            {sub && <div style={{color:C.muted,fontSize:10.5,marginTop:1}}>{sub}</div>}
+          </div>
+        ))}
+      </div>
+      <div style={{color:C.muted,fontSize:11,margin:'14px 0 6px'}}>Dials per day · dashed line = {member.dial_goal}-dial goal · hover a bar for details</div>
+      <DailyBars series={series} max={smax} goal={member.dial_goal}/>
+      <div style={{fontWeight:600,fontSize:13,margin:'16px 0 6px'}}>Call history</div>
+      {rows.length===0 ? <div style={{color:C.muted,fontSize:13}}>No calls logged in the last 30 days.</div> :
+      <div>
+        {list.map(a=>(
+          <div key={a.id} onClick={onOpen?()=>onOpen(isNaN(Number(a.lead_id))?a.lead_id:Number(a.lead_id)):undefined} style={{display:'flex',justifyContent:'space-between',gap:10,fontSize:12.5,padding:'6px 0',borderBottom:'1px solid '+C.line,cursor:onOpen?'pointer':'default'}}>
+            <span style={{minWidth:0}}><b>{leadName(a.lead_id)||a.lead_name||'Lead'}</b> <span style={{color:C.muted}}>· {OUTCOME[a.outcome]?.short||a.outcome}{a.amount?' · '+money(a.amount):''}{a.note?' — '+a.note:''}</span></span>
+            <span style={{color:C.muted,whiteSpace:'nowrap'}}>{fmtWhen(a.created_at)}</span>
+          </div>
+        ))}
+        {rows.length>15 && <button onClick={()=>setShowAll(!showAll)} style={{marginTop:10,background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'7px 12px',fontSize:12,cursor:'pointer'}}>{showAll?'Show fewer':'Show all '+rows.length}</button>}
+      </div>}
     </div>
   )
 }
