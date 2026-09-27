@@ -3,12 +3,13 @@ import { supabase } from './supabaseClient'
 import AcademyPage from './AcademyPage'
 import CommandCenter from './CommandCenter'
 import KpiPage from './KpiPage'
-import { REPAIRS, BLANK_DETAILS, detailsOf, money, compResult, eqOf, scoreOf, stageOf, stageIdx, STAGE, OUTCOME_STAGE, moveStage, patchLead } from './leadModel'
+import { REPAIRS, BLANK_DETAILS, detailsOf, money, eqOf, scoreOf, stageOf, STAGE } from './leadModel'
 import Pipeline from './Pipeline'
+import { CallCard, ScriptPanel, LogCall, HandoffPanel } from './LeadPanels'
 import VaWorkspace from './VaWorkspace'
-import { fetchTeam, teamErr as teamErrMsg, campaignOf, campaignName } from './team'
+import { fetchTeam, teamErr as teamErrMsg, campaignOf, campaignName, getMe, setMe } from './team'
 import DealAnalyzer from './DealAnalyzer'
-import { OUTCOMES, OUTCOME, fetchActivity, logActivity, activityErr, tally, inLastDays, getCaller, saveCaller } from './activity'
+import { fetchActivity, activityErr, tally, inLastDays } from './activity'
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -56,7 +57,9 @@ const NAV = [
 
 export default function App(){
   const isMobile = useIsMobile()
-  const [page,setPage] = useState('leads')
+  const [page,setPage] = useState(()=>{ const m=getMe(); return m && m!=='owner' ? 'va' : 'leads' })
+  const [meId,setMeId] = useState(getMe())
+  const onMe = id => { setMe(id); setMeId(id) }
   const [menuOpen,setMenuOpen] = useState(false)
   const [leads,setLeads] = useState([])
   const [loading,setLoading] = useState(true)
@@ -92,6 +95,11 @@ export default function App(){
   const openLead = (id)=>{ setFocusId(String(id)); setPage('leads'); window.scrollTo({top:0}) }
   const analyzeLead = (id)=>{ setAnalyzeId(String(id)); setPage('comping'); window.scrollTo({top:0}) }
   const today = tally(inLastDays(activity,1))
+  const meMember = team.find(m=>String(m.id)===meId)
+  const vaMode = !!meMember && meId!=='owner'
+  const VA_PAGES = ['va','academy']
+  const navItems = vaMode ? NAV.filter(([id])=>VA_PAGES.includes(id)) : NAV
+  const view = vaMode && !VA_PAGES.includes(page) ? 'va' : page
 
   return (
     <div style={{display:'flex',minHeight:'100vh',background:C.navy,fontFamily:'Helvetica Neue,Arial',color:C.cream}}>
@@ -101,8 +109,9 @@ export default function App(){
           <div style={{fontFamily:'Georgia,serif',fontSize:20,fontWeight:800,lineHeight:1}}>WHOLESALE<span style={{color:C.orange}}>OS</span></div>
           <div style={{color:C.muted,fontSize:9,letterSpacing:2,textTransform:'uppercase',marginTop:4}}>by Icole Agency</div>
         </div>
-        {NAV.map(([id,i,l])=>(
-          <div key={id} onClick={()=>go(id)} style={{display:'flex',alignItems:'center',gap:11,background:page===id?C.orange:'transparent',color:page===id?C.ink:C.muted,borderRadius:9,padding:'11px 13px',fontSize:13,fontWeight:600,marginBottom:3,cursor:'pointer'}}>
+        {vaMode && <div onClick={()=>go('va')} style={{background:C.panel,borderRadius:10,padding:'9px 12px',marginBottom:12,fontSize:12,cursor:'pointer'}}><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>Working as</div><div style={{fontWeight:700,marginTop:2}}>{meMember.name}</div></div>}
+        {navItems.map(([id,i,l])=>(
+          <div key={id} onClick={()=>go(id)} style={{display:'flex',alignItems:'center',gap:11,background:view===id?C.orange:'transparent',color:view===id?C.ink:C.muted,borderRadius:9,padding:'11px 13px',fontSize:13,fontWeight:600,marginBottom:3,cursor:'pointer'}}>
             <span style={{fontSize:12,fontWeight:800,width:16}}>{i}</span>{l}
           </div>
         ))}
@@ -122,8 +131,8 @@ export default function App(){
         </div>}
         {isMobile && menuOpen &&
         <div style={{background:C.ink,borderBottom:'1px solid '+C.line,padding:'8px 12px'}}>
-          {NAV.map(([id,i,l])=>(
-            <div key={id} onClick={()=>go(id)} style={{display:'flex',alignItems:'center',gap:10,background:page===id?C.orange:'transparent',color:page===id?C.ink:C.muted,borderRadius:8,padding:'10px 12px',fontSize:13,fontWeight:600,marginBottom:3}}>
+          {navItems.map(([id,i,l])=>(
+            <div key={id} onClick={()=>go(id)} style={{display:'flex',alignItems:'center',gap:10,background:view===id?C.orange:'transparent',color:view===id?C.ink:C.muted,borderRadius:8,padding:'10px 12px',fontSize:13,fontWeight:600,marginBottom:3}}>
               <span style={{fontWeight:800,width:16}}>{i}</span>{l}
             </div>
           ))}
@@ -131,13 +140,13 @@ export default function App(){
 
         <div style={{padding:isMobile?'18px 16px':'26px 30px',width:'100%',maxWidth:1240,margin:0,boxSizing:'border-box'}}>
           {err && <ErrorBanner msg={err} onRetry={load} onClose={()=>setErr('')}/>}
-          {page==='va' && <VaWorkspace leads={leads} activity={activity} campaigns={campaigns} team={team} teamErr={tErr} reloadTeam={loadTeam} reloadLeads={reloadQuiet} openLead={openLead} isMobile={isMobile}/>}
-          {page==='leads' && <LeadsPage key={focusId||'all'} initialSel={focusId} campaigns={campaigns} leads={leads} loading={loading} reload={load} reloadQuiet={reloadQuiet} loadErr={err} activity={activity} reloadActivity={loadActivity} onAnalyze={analyzeLead} isMobile={isMobile}/>}
-          {page==='comping' && <DealAnalyzer key={analyzeId||'blank'} leads={leads} initialLeadId={analyzeId} reload={load} isMobile={isMobile}/>}
-          {page==='academy' && <AcademyPage isMobile={isMobile}/>}
-          {page==='command' && <CommandCenter leads={leads} activity={activity} reload={reloadQuiet} openLead={openLead} isMobile={isMobile} goTo={go}/>}
-          {page==='kpis' && <KpiPage leads={leads} campaigns={campaigns} activity={activity} actErr={actErr} reload={loadActivity} isMobile={isMobile} goTo={go}/>}
-          {page==='pipeline' && <Pipeline leads={leads} activity={activity} reload={reloadQuiet} openLead={openLead} analyze={analyzeLead} isMobile={isMobile}/>}
+          {view==='va' && <VaWorkspace leads={leads} activity={activity} campaigns={campaigns} team={team} teamErr={tErr} reloadTeam={loadTeam} reloadLeads={reloadQuiet} reloadActivity={loadActivity} meId={meId} onMe={onMe} isMobile={isMobile}/>}
+          {view==='leads' && <LeadsPage key={focusId||'all'} initialSel={focusId} campaigns={campaigns} leads={leads} loading={loading} reload={load} reloadQuiet={reloadQuiet} loadErr={err} activity={activity} reloadActivity={loadActivity} onAnalyze={analyzeLead} isMobile={isMobile}/>}
+          {view==='comping' && <DealAnalyzer key={analyzeId||'blank'} leads={leads} initialLeadId={analyzeId} reload={load} isMobile={isMobile}/>}
+          {view==='academy' && <AcademyPage isMobile={isMobile}/>}
+          {view==='command' && <CommandCenter leads={leads} activity={activity} reload={reloadQuiet} openLead={openLead} isMobile={isMobile} goTo={go}/>}
+          {view==='kpis' && <KpiPage leads={leads} campaigns={campaigns} activity={activity} actErr={actErr} reload={loadActivity} isMobile={isMobile} goTo={go}/>}
+          {view==='pipeline' && <Pipeline leads={leads} activity={activity} reload={reloadQuiet} openLead={openLead} analyze={analyzeLead} isMobile={isMobile}/>}
         </div>
       </div>
     </div>
@@ -378,297 +387,6 @@ function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,reloadLeads,on
         <LogCall lead={lead} activity={activity} reloadActivity={reloadActivity} reloadLeads={reloadLeads}/>
         <HandoffPanel lead={lead} reloadLeads={reloadLeads}/>
       </div>
-    </div>
-  )
-}
-
-function HandoffPanel({lead,reloadLeads}){
-  const h = (lead.details && lead.details.handoff) || null
-  const [note,setNote] = useState('')
-  const [busy,setBusy] = useState(false)
-  const [err,setErr] = useState('')
-  async function save(patch){
-    setBusy(true); setErr('')
-    try{ await patchLead(lead, { handoff:patch }); setNote(''); if(reloadLeads) await reloadLeads() }
-    catch(e){ setErr(/fetch/i.test(e.message)?"Can't reach the database — try again in a minute.":e.message) }
-    setBusy(false)
-  }
-  const when = iso => iso ? new Date(iso).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''
-  const open = h && h.status==='open'
-  return (
-    <div style={{background:C.panel,border:'1px solid '+(open?C.amber+'88':C.line),borderRadius:16,padding:22}}>
-      <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:1,marginBottom:10}}>Hot lead hand-off</div>
-      {open ?
-      <div>
-        <div style={{background:C.amber+'14',border:'1px solid '+C.amber+'55',borderRadius:10,padding:'11px 13px'}}>
-          <div style={{color:C.amber,fontSize:12,fontWeight:700}}>Waiting on the closer · handed off by {h.by} · {when(h.at)}</div>
-          {h.note && <div style={{color:C.cream,fontSize:13.5,lineHeight:1.5,marginTop:6}}>{h.note}</div>}
-        </div>
-        <div style={{display:'flex',gap:8,marginTop:10}}>
-          <button disabled={busy} onClick={()=>save({...h,status:'done',done_at:new Date().toISOString()})} style={{background:C.green,color:C.ink,border:'none',borderRadius:8,padding:'8px 14px',fontSize:12,fontWeight:800,cursor:'pointer'}}>Mark handled</button>
-          <button disabled={busy} onClick={()=>save(null)} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'8px 14px',fontSize:12,cursor:'pointer'}}>Cancel hand-off</button>
-        </div>
-      </div> :
-      <div>
-        {h && h.status==='done' && <div style={{color:C.green,fontSize:12,marginBottom:10}}>Last hand-off from {h.by} was handled {when(h.done_at)}.</div>}
-        <div style={{color:C.muted,fontSize:12.5,lineHeight:1.5,marginBottom:10}}>Seller is motivated or an appointment is set? Send it to the closer with what they need to know.</div>
-        <textarea value={note} onChange={e=>setNote(e.target.value)} rows={3} placeholder="e.g. Wants out in 30 days, roof leaks, open to $140k. Call her after 5pm." style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'10px 12px',color:C.cream,fontSize:13,outline:'none',width:'100%',boxSizing:'border-box',resize:'vertical',fontFamily:'inherit'}}/>
-        <button disabled={busy||!note.trim()} onClick={()=>save({status:'open',by:getCaller()||'VA',note:note.trim(),at:new Date().toISOString()})} style={{marginTop:10,background:C.orange,color:C.ink,border:'none',borderRadius:8,padding:'9px 16px',fontSize:12.5,fontWeight:800,cursor:(busy||!note.trim())?'default':'pointer',opacity:(busy||!note.trim())?0.5:1}}>Hand off to closer</button>
-      </div>}
-      {err && <div style={{color:C.red,fontSize:12.5,marginTop:10}}>{err}</div>}
-    </div>
-  )
-}
-
-function CallCard({lead,onEdit,onAnalyze}){
-  const cr = compResult(lead)
-  const d = detailsOf(lead)
-  const flagged = REPAIRS.filter(([k])=>d.repairs[k])
-  const lo = flagged.reduce((s,r)=>s+r[2],0)
-  const hi = flagged.reduce((s,r)=>s+r[3],0)
-  const ask = Number(d.asking_price)||0
-  const arv = Number(lead.arv)||0
-  const ceiling = cr ? cr.walk : arv ? Math.max(0, Math.round(arv*0.70 - hi - 15000)) : 0
-  const facts = []
-  if(d.occupancy!=='Unknown') facts.push(d.occupancy)
-  if(d.beds) facts.push(d.beds+'bd')
-  if(d.baths) facts.push(d.baths+'ba')
-  if(d.sqft) facts.push(Number(d.sqft).toLocaleString()+' sqft')
-  if(d.year_built) facts.push('built '+d.year_built)
-  const empty = facts.length===0 && flagged.length===0 && !ask && d.sell_reason==='Unknown' && d.timeline==='Unsure' && !d.seller_notes && !d.repair_notes
-
-  return (
-    <div style={{background:C.panel,border:'1px solid '+C.orange+'66',borderRadius:16,padding:22}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
-        <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:1,color:C.orange}}>Call Card — negotiation facts</div>
-        <div style={{display:'flex',gap:6}}>
-          <button onClick={onAnalyze} style={{background:'transparent',border:'1px solid '+C.orange,color:C.orange,borderRadius:8,padding:'5px 11px',fontSize:11,fontWeight:700,cursor:'pointer'}}>{cr?'Re-run comps':'Run comps'}</button>
-          <button onClick={onEdit} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'5px 11px',fontSize:11,cursor:'pointer'}}>Update</button>
-        </div>
-      </div>
-
-      {cr &&
-      <div style={{background:C.ink,borderRadius:10,padding:'11px 14px',marginBottom:12,display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
-        <div><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>ARV{cr.confidence?' · '+cr.confidence:''}</div><div style={{color:C.cream,fontSize:14,fontWeight:700,marginTop:3}}>{money(cr.arv)}</div></div>
-        <div><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>Rehab</div><div style={{color:C.cream,fontSize:14,fontWeight:700,marginTop:3}}>{money(cr.rehab)}</div></div>
-        <div><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>Offer range</div><div style={{color:C.orange,fontSize:14,fontWeight:700,marginTop:3}}>{money(cr.open)}–{money(cr.walk)}</div></div>
-      </div>}
-
-      {empty && !cr ?
-      <div style={{color:C.muted,fontSize:13,lineHeight:1.55}}>No intel on this property yet. Hit <span style={{color:C.orange,fontWeight:700}}>Update</span> and fill in the condition, asking price and seller situation before the next call — that's your leverage.</div>
-      :
-      <div>
-        {facts.length>0 && <div style={{color:C.cream,fontSize:13,marginBottom:12}}>{facts.join(' · ')}</div>}
-
-        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:14}}>
-          <div style={{background:C.ink,borderRadius:10,padding:'10px 12px'}}>
-            <div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>Why selling</div>
-            <div style={{color:d.sell_reason==='Unknown'?C.muted:C.cream,fontSize:13,fontWeight:600,marginTop:3}}>{d.sell_reason}</div>
-          </div>
-          <div style={{background:C.ink,borderRadius:10,padding:'10px 12px'}}>
-            <div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>Timeline</div>
-            <div style={{color:d.timeline==='ASAP'?C.green:C.cream,fontSize:13,fontWeight:600,marginTop:3}}>{d.timeline}</div>
-          </div>
-          <div style={{background:C.ink,borderRadius:10,padding:'10px 12px'}}>
-            <div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>Asking</div>
-            <div style={{color:ask?C.cream:C.muted,fontSize:13,fontWeight:600,marginTop:3}}>{ask?money(ask):'—'}</div>
-          </div>
-        </div>
-
-        {flagged.length>0 &&
-        <div style={{background:C.ink,borderRadius:10,padding:'12px 14px',marginBottom:12}}>
-          <div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1,marginBottom:8}}>Repair ammo — use these on the call</div>
-          {flagged.map(([k,label,l2,h2])=>(
-            <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'3px 0',fontSize:13}}>
-              <span style={{color:C.cream}}>{label}</span>
-              <span style={{color:C.amber,fontWeight:600}}>{money(l2)}–{money(h2)}</span>
-            </div>
-          ))}
-          <div style={{display:'flex',justifyContent:'space-between',borderTop:'1px solid '+C.line,marginTop:8,paddingTop:8,fontSize:13}}>
-            <span style={{color:C.cream,fontWeight:700}}>Total to justify your discount</span>
-            <span style={{color:C.orange,fontWeight:800}}>{money(lo)}–{money(hi)}</span>
-          </div>
-        </div>}
-
-        {ask>0 && arv>0 &&
-        <div style={{background:C.orange+'14',border:'1px solid '+C.orange+'44',borderRadius:10,padding:'11px 14px',marginBottom:12,fontSize:12.5,color:C.cream,lineHeight:1.5}}>
-          Seller wants <b>{money(ask)}</b>. {cr?'Your comped walk-away is':<>With {flagged.length>0?'the repairs above':'repairs'} + your fee, your 70%-rule ceiling is about</>} <b style={{color:C.orange}}>{money(ceiling)}</b>{ask>ceiling?' — that gap is the conversation.':' — asking is already inside your number.'}
-        </div>}
-
-        {d.repair_notes && <div style={{marginBottom:8}}><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>Condition notes</div><div style={{color:C.cream,fontSize:13,lineHeight:1.5}}>{d.repair_notes}</div></div>}
-        {d.seller_notes && <div><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>Seller notes</div><div style={{color:C.cream,fontSize:13,lineHeight:1.5}}>{d.seller_notes}</div></div>}
-      </div>}
-    </div>
-  )
-}
-
-function ScriptPanel({lead}){
-  const [stage,setStage] = useState(0)
-  const [obj,setObj] = useState(null)
-  const d = detailsOf(lead)
-  const first = (lead.name||'there').split(' ')[0]
-  const flagged = REPAIRS.filter(([k])=>d.repairs[k])
-  const lo = flagged.reduce((s,r)=>s+r[2],0)
-  const hi = flagged.reduce((s,r)=>s+r[3],0)
-  const repairsTxt = flagged.length ? flagged.map(r=>r[1].toLowerCase()).join(', ') : 'the repairs we talked about'
-  const ammoTxt = flagged.length ? money(lo)+'–'+money(hi) : 'serious money'
-  const arv = Number(lead.arv)||0
-  const cr = compResult(lead)
-  const ceiling = cr ? cr.open : arv ? Math.max(0, Math.round(arv*0.70 - (flagged.length?hi:20000) - 15000)) : 0
-  const offerTxt = ceiling ? (cr?money(ceiling):'about '+money(ceiling)) : '[your offer]'
-  const ask = Number(d.asking_price)||0
-  const tl = d.timeline!=='Unsure' ? d.timeline : '30 days'
-  const reason = d.sell_reason!=='Unknown' ? d.sell_reason.toLowerCase() : 'your situation'
-  const addr = (lead.address||'your property')+(lead.city?(' in '+lead.city):'')
-
-  const stages = [
-    {t:'1 · Intro — own the frame', goal:'First 60 seconds. You are qualifying THEM.', lines:[
-      '"Hey, is this '+first+'? ... '+first+', this is ___ with Icole Agency. I\'m reaching out about '+addr+' — we buy houses '+(lead.city?('in '+lead.city):'in your area')+' for cash, and yours came across my desk. Got two minutes?"',
-      '"Now, I can\'t promise we\'re a fit — first I need to see whether the property even QUALIFIES for our program. Mind if I ask a few quick questions?"',
-    ]},
-    {t:'2 · Fact-find — the 4 pillars', goal:'Condition → motivation → timeline → price. Check the repair boxes on the Call Card while they talk.', lines:[
-      '"Tell me about the house — if I walked in the front door today, what would I see?"',
-      '"When\'s the last time the roof was done? HVAC? Hot water tank?"',
-      '"And what\'s got you potentially thinking about selling? ... How long has that been going on?"',
-      '"If everything lined up, when would you want this done — 30 days, 60, or just exploring?"',
-      '"Last one: if I could close on your timeline and you didn\'t fix a thing — what number works for you?"',
-    ]},
-    {t:'3 · Pitch — sell the situation', goal:'Mirror their pillars back. You\'re selling certainty, not buying a house.', lines:[
-      '"Here\'s what I\'m hearing: '+reason+', the house needs '+repairsTxt+', and you want this handled '+(tl==='ASAP'?'as soon as possible':'within '+tl)+'."',
-      '"That\'s exactly what we\'re built for — cash, as-is, no repairs, no agents, no fees, and YOU pick the closing date."',
-    ]},
-    {t:'4 · Offer — anchor with repair math', goal:'The repairs justify the number. Then make the money feel real.', lines:[
-      flagged.length
-        ? '"A retail buyer would need '+ammoTxt+' of work before a bank touches this — '+repairsTxt+'. That\'s why cash matters here."'
-        : '"A retail buyer would need serious repair money before a bank touches a house like this — that\'s why cash matters here."',
-      '"Based on all that, I\'m at '+offerTxt+(ask?(' — I know you mentioned '+money(ask)+', so let\'s talk about the gap'):'')+'."',
-      '"Let me ask you something: when\'s the last time you had access to that kind of money in one wire?"',
-    ]},
-    {t:'5 · Close — assume it, calendar it', goal:'Never "so what do you think?" Go straight to logistics.', lines:[
-      '"Here\'s what happens next: I send the agreement tonight, you sign it right from your phone, and title gets started tomorrow."',
-      '"What\'s the best email for you?"',
-    ]},
-  ]
-
-  const objections = [
-    ['price','"Price is too low"', ask&&flagged.length
-      ? '"I hear you. You mentioned '+money(ask)+' — but walk through it with me: '+repairsTxt+' runs '+ammoTxt+'. Take that off '+money(ask)+' and we\'re not far apart — except my number is cash, certain, and done on your timeline."'
-      : '"I hear you. Walk through it with me though — once you subtract what the repairs cost and what waiting costs you, our numbers are closer than they look. And mine is cash and certain."'],
-    ['think','"I need to think about it"',
-      '"Totally fair, '+first+'. Just so I\'m helping the right way — is it the price, the timing, or something else? ... Okay. If we solved that one piece, would we have a deal?"'],
-    ['landlord','Tired landlord',
-      '"Run the math with me: after vacancies, repairs and the 2am phone calls, what did the place actually NET you last year? ... Now compare that to a lump sum this month and never thinking about it again. Which one buys back your time?"'],
-    ['agent','"I might list it"',
-      '"You could — and for a turn-key house I\'d tell you to. But listed, you\'re looking at 6% commission, '+(flagged.length?(repairsTxt+' fixed first'):'repairs done first')+', and 60–90 days of showings. My offer is net, as-is, two weeks. What matters more — the top number, or the certain one?"'],
-  ]
-  const activeObj = objections.find(o=>o[0]===obj)
-  const st = stages[stage]
-
-  return (
-    <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:22}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
-        <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:1}}>Live Call Script</div>
-        <div style={{display:'flex',gap:5}}>
-          {stages.map((_,i)=>(
-            <span key={i} onClick={()=>{setStage(i);setObj(null)}} style={{width:9,height:9,borderRadius:9,background:i===stage?C.orange:i<stage?C.orange+'66':C.line,cursor:'pointer'}}/>
-          ))}
-        </div>
-      </div>
-      <div style={{color:C.muted,fontSize:11,marginBottom:14}}>Auto-filled from this lead's Call Card</div>
-
-      <div style={{color:C.orange,fontWeight:700,fontSize:14,marginBottom:3}}>{st.t}</div>
-      <div style={{color:C.muted,fontSize:12,marginBottom:12,lineHeight:1.4}}>{st.goal}</div>
-      {st.lines.map((ln,i)=>(
-        <div key={i} style={{background:C.ink,borderLeft:'3px solid '+C.orange,borderRadius:'0 8px 8px 0',padding:'11px 13px',marginBottom:8,fontSize:13.5,lineHeight:1.55,color:C.cream}}>{ln}</div>
-      ))}
-
-      <div style={{display:'flex',gap:8,marginTop:12}}>
-        <button onClick={()=>{setStage(Math.max(0,stage-1));setObj(null)}} disabled={stage===0} style={{background:'transparent',border:'1px solid '+C.line,color:stage===0?C.line:C.muted,borderRadius:8,padding:'8px 16px',fontSize:12,fontWeight:700,cursor:stage===0?'default':'pointer'}}>← Back</button>
-        {stage<stages.length-1
-          ? <button onClick={()=>{setStage(stage+1);setObj(null)}} style={{flex:1,background:C.orange,color:C.ink,border:'none',borderRadius:8,padding:'8px 16px',fontSize:12,fontWeight:800,cursor:'pointer'}}>Next stage →</button>
-          : <button onClick={()=>{setStage(0);setObj(null)}} style={{flex:1,background:C.green,color:C.ink,border:'none',borderRadius:8,padding:'8px 16px',fontSize:12,fontWeight:800,cursor:'pointer'}}>Deal talk done — restart</button>}
-      </div>
-
-      <div style={{borderTop:'1px solid '+C.line,marginTop:16,paddingTop:12}}>
-        <div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1,marginBottom:8}}>They pushed back? Tap it:</div>
-        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-          {objections.map(([k,label])=>(
-            <button key={k} onClick={()=>setObj(obj===k?null:k)} style={{background:obj===k?C.amber:'transparent',border:'1px solid '+(obj===k?C.amber:C.line),color:obj===k?C.ink:C.muted,borderRadius:14,padding:'5px 11px',fontSize:11.5,fontWeight:600,cursor:'pointer'}}>{label}</button>
-          ))}
-        </div>
-        {activeObj &&
-        <div style={{background:C.amber+'14',border:'1px solid '+C.amber+'55',borderRadius:10,padding:'12px 14px',marginTop:10,fontSize:13.5,lineHeight:1.55,color:C.cream}}>{activeObj[2]}</div>}
-      </div>
-    </div>
-  )
-}
-
-function LogCall({lead,activity,reloadActivity,reloadLeads}){
-  const [caller,setCaller] = useState(getCaller())
-  const [note,setNote] = useState('')
-  const [pending,setPending] = useState(null)
-  const [amount,setAmount] = useState('')
-  const [busy,setBusy] = useState(false)
-  const [msg,setMsg] = useState(null)
-  const history = activity.filter(a=>a.lead_id===String(lead.id)).slice(0,6)
-
-  async function submit(outcome){
-    const o = OUTCOME[outcome]
-    if(o.amount && pending!==outcome){ setPending(outcome); setAmount(''); return }
-    setBusy(true); setMsg(null)
-    try{
-      await logActivity(lead, outcome, {amount, note, caller})
-      saveCaller(caller)
-      let moved = ''
-      try{
-        const cur = stageOf(lead, activity), target = OUTCOME_STAGE[outcome]
-        const extra = {}
-        const prevDeal = (lead.details && lead.details.deal) || {}
-        if(outcome==='closed' && Number(amount)) extra.deal = {...prevDeal, fee:Number(amount), closing_date:prevDeal.closing_date||new Date().toISOString().slice(0,10)}
-        if(outcome==='offer' && Number(amount)) extra.deal = {...prevDeal, last_offer:Number(amount)}
-        const forward = target && (target==='dead' ? cur!=='dead' : stageIdx(target)>stageIdx(cur))
-        if(forward){ await moveStage(lead, target, extra); moved = ' · moved to '+STAGE[target].l+' in Pipeline' }
-        else if(extra.deal){ await patchLead(lead, extra) }
-        if((forward || extra.deal) && reloadLeads) reloadLeads()
-      }catch{ moved = ' · (pipeline stage not updated — try moving it on the Pipeline page)' }
-      setMsg({ok:true,t:'Logged: '+o.label+moved}); setNote(''); setPending(null); setAmount('')
-      reloadActivity()
-    }catch(e){ setMsg({ok:false,t:activityErr(e.message)}) }
-    setBusy(false)
-  }
-  const when = iso => { const d=new Date(iso); const t=d.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}); return d.toDateString()===new Date().toDateString() ? 'Today '+t : d.toLocaleDateString([], {month:'short',day:'numeric'})+' '+t }
-
-  return (
-    <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:22}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
-        <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:1}}>Log this call</div>
-        <label style={{display:'flex',alignItems:'center',gap:6,color:C.muted,fontSize:11}}>Caller
-          <input value={caller} onChange={e=>setCaller(e.target.value)} onBlur={()=>saveCaller(caller)} placeholder="your name" style={{background:C.ink,border:'1px solid '+C.line,borderRadius:6,padding:'5px 8px',color:C.cream,fontSize:12,outline:'none',width:110}}/>
-        </label>
-      </div>
-      <input value={note} onChange={e=>setNote(e.target.value)} placeholder="Quick note (optional) — e.g. call back Tue after 5" style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'9px 12px',color:C.cream,fontSize:13,outline:'none',width:'100%',boxSizing:'border-box',marginBottom:10}}/>
-      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-        {OUTCOMES.map(o=>(
-          <button key={o.key} disabled={busy} onClick={()=>submit(o.key)} style={{background:pending===o.key?C.orange:C.ink,color:pending===o.key?C.ink:(o.key==='dead'?C.muted:C.cream),border:'1px solid '+(pending===o.key?C.orange:C.line),borderRadius:8,padding:'8px 11px',fontSize:12,fontWeight:600,cursor:busy?'default':'pointer'}}>{o.label}</button>
-        ))}
-      </div>
-      {pending &&
-      <div style={{display:'flex',gap:8,marginTop:10}}>
-        <input autoFocus type="number" value={amount} onChange={e=>setAmount(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit(pending)} placeholder={OUTCOME[pending].amount+' ($)'} style={{flex:1,minWidth:0,background:C.ink,border:'1px solid '+C.orange,borderRadius:8,padding:'9px 12px',color:C.cream,fontSize:13,outline:'none'}}/>
-        <button onClick={()=>submit(pending)} disabled={busy} style={{background:C.orange,color:C.ink,border:'none',borderRadius:8,padding:'0 16px',fontWeight:800,fontSize:12,cursor:'pointer'}}>Save</button>
-        <button onClick={()=>setPending(null)} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'0 12px',fontSize:12,cursor:'pointer'}}>Cancel</button>
-      </div>}
-      {msg && <div style={{marginTop:10,fontSize:12.5,lineHeight:1.45,color:msg.ok?C.green:C.red,background:(msg.ok?C.green:C.red)+'14',border:'1px solid '+(msg.ok?C.green:C.red)+'44',borderRadius:8,padding:'8px 11px'}}>{msg.t}</div>}
-      {history.length>0 &&
-      <div style={{borderTop:'1px solid '+C.line,marginTop:14,paddingTop:10}}>
-        <div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>Call history</div>
-        {history.map(a=>(
-          <div key={a.id} style={{display:'flex',justifyContent:'space-between',gap:10,fontSize:12,padding:'4px 0',borderBottom:'1px solid '+C.line+'88'}}>
-            <span style={{color:C.cream}}>{OUTCOME[a.outcome]?.short||a.outcome}{a.amount?' · '+money(a.amount):''}{a.note?<span style={{color:C.muted}}> — {a.note}</span>:null}</span>
-            <span style={{color:C.muted,whiteSpace:'nowrap'}}>{when(a.created_at)} · {a.caller}</span>
-          </div>
-        ))}
-      </div>}
     </div>
   )
 }

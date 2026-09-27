@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { STAGE, stageOf, scoreOf, gradeLetter, patchLead } from './leadModel'
 import { tally, inLastDays, pct, saveCaller } from './activity'
-import { saveCampaign, deleteCampaign, saveMember, deleteMember, campaignOf, campaignName, getMe, setMe, openHandoff } from './team'
+import { saveCampaign, deleteCampaign, saveMember, deleteMember, campaignOf, campaignName, openHandoff } from './team'
+import { CallCard, ScriptPanel, LogCall, HandoffPanel, IntelEditor } from './LeadPanels'
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -12,15 +13,15 @@ const GRADE_C = { A:C.green, B:C.amber, C:C.orange, D:C.red }
 const CLOSED_STAGES = ['contract','assigned','closed','dead']
 const STATES = ['NJ','FL','DE','PA','Other']
 
-export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloadTeam,reloadLeads,openLead,isMobile}){
-  const [meId,setMeId] = useState(getMe())
+export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloadTeam,reloadLeads,reloadActivity,meId,onMe,isMobile}){
+  const [work,setWork] = useState(null)   // { ids:[lead ids in list order], i:index } while working leads
   const [showManage,setShowManage] = useState(false)
   const [showAll,setShowAll] = useState(false)
   const me = team.find(m=>String(m.id)===meId) || null
   const ownerView = meId==='owner' || !me
 
   function pickMe(id){
-    setMeId(id); setMe(id)
+    onMe(id); setWork(null)
     const m = team.find(x=>String(x.id)===id)
     if(m) saveCaller(m.name)
   }
@@ -73,6 +74,14 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
     )
   }
 
+  if(work && me){
+    const id = work.ids[work.i]
+    const go = i => { setWork({...work, i}); window.scrollTo({top:0}) }
+    return <LeadWork key={id} lead={leads.find(l=>l.id===id)} idx={work.i} total={work.ids.length}
+      onBack={()=>setWork(null)} onPrev={work.i>0?()=>go(work.i-1):null} onNext={work.i<work.ids.length-1?()=>go(work.i+1):null}
+      activity={activity} reloadActivity={reloadActivity} reloadLeads={reloadLeads} campaigns={campaigns} isMobile={isMobile}/>
+  }
+
   return (
     <div>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12,flexWrap:'wrap'}}>
@@ -119,10 +128,11 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
             <div style={{color:C.muted,fontSize:11.5,marginBottom:10}}>Never-called leads first, then by lead grade. Tap a lead to open its Call Card and script.</div>
             {queue.length===0 ? <div style={{color:C.muted,fontSize:13,padding:'8px 0'}}>{myCamps.length?'Nothing to call in your counties right now. Ask for a new list, or check that leads have a campaign set.':'Ask your manager to assign you to a county.'}</div> :
             <div>
+              <button onClick={()=>{ setWork({ ids:queue.map(x=>x.l.id), i:0 }); window.scrollTo({top:0}) }} style={{width:'100%',background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'11px',fontWeight:800,fontSize:13,cursor:'pointer',marginBottom:8}}>Start working my list →</button>
               {shown.map(({l,s,n,last})=>{
                 const g = gradeLetter(s), st = stageOf(l,activity)
                 return (
-                  <div key={l.id} onClick={()=>openLead(l.id)} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 6px',borderBottom:'1px solid '+C.line,cursor:'pointer'}}>
+                  <div key={l.id} onClick={()=>{ setWork({ ids:queue.map(x=>x.l.id), i:queue.findIndex(x=>x.l.id===l.id) }); window.scrollTo({top:0}) }} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 6px',borderBottom:'1px solid '+C.line,cursor:'pointer'}}>
                     <span style={{width:26,height:26,borderRadius:7,background:GRADE_C[g]+'22',color:GRADE_C[g],border:'1px solid '+GRADE_C[g],display:'flex',alignItems:'center',justifyContent:'center',fontWeight:800,fontSize:12,flexShrink:0}}>{g}</span>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontWeight:600,fontSize:13.5}}>{l.name}</div>
@@ -143,7 +153,7 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
             <div style={{fontWeight:700,fontSize:14,marginBottom:10}}>My hand-offs</div>
             {myHandoffs.length===0 ? <div style={{color:C.muted,fontSize:13,lineHeight:1.5}}>When you set an appointment or find a motivated seller, open the lead and tap <b style={{color:C.cream}}>Hand off to closer</b>.</div> :
             myHandoffs.map(l=>{ const h=l.details.handoff; return (
-              <div key={l.id} onClick={()=>openLead(l.id)} style={{padding:'8px 0',borderBottom:'1px solid '+C.line,cursor:'pointer'}}>
+              <div key={l.id} onClick={()=>{ setWork({ ids:[l.id], i:0 }); window.scrollTo({top:0}) }} style={{padding:'8px 0',borderBottom:'1px solid '+C.line,cursor:'pointer'}}>
                 <div style={{display:'flex',justifyContent:'space-between',gap:8}}>
                   <span style={{fontWeight:600,fontSize:13}}>{l.name}</span>
                   <span style={{fontSize:11,fontWeight:700,color:h.status==='open'?C.amber:C.green}}>{h.status==='open'?'Waiting on closer':'Handled'}</span>
@@ -180,10 +190,60 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
         </div>
       </div>}
 
-      <div style={{marginTop:16}}>
+      {ownerView && <div style={{marginTop:16}}>
         <button onClick={()=>setShowManage(!showManage)} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'8px 14px',fontSize:12.5,fontWeight:600,cursor:'pointer'}}>{showManage?'Hide':'Manage'} team & campaigns</button>
+      </div>}
+      {ownerView && showManage && <Manage leads={leads} campaigns={campaigns} team={team} reloadTeam={reloadTeam} reloadLeads={reloadLeads} isMobile={isMobile}/>}
+    </div>
+  )
+}
+
+function LeadWork({lead,idx,total,onBack,onPrev,onNext,activity,reloadActivity,reloadLeads,campaigns,isMobile}){
+  const [editing,setEditing] = useState(false)
+  const btn = (primary,disabled) => ({background:primary?C.orange:'transparent',color:primary?C.ink:C.muted,border:'1px solid '+(primary?C.orange:C.line),borderRadius:8,padding:'8px 14px',fontSize:12.5,fontWeight:700,cursor:disabled?'default':'pointer',opacity:disabled?0.4:1,whiteSpace:'nowrap'})
+  const bar = (
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:16}}>
+      <button onClick={onBack} style={btn(false)}>← My call list</button>
+      <span style={{color:C.muted,fontSize:12.5}}>Lead {idx+1} of {total}</span>
+      <div style={{display:'flex',gap:6}}>
+        <button onClick={onPrev||undefined} disabled={!onPrev} style={btn(false,!onPrev)}>‹ Previous</button>
+        <button onClick={onNext||undefined} disabled={!onNext} style={btn(true,!onNext)}>{onNext?'Next lead →':'End of list'}</button>
       </div>
-      {showManage && <Manage leads={leads} campaigns={campaigns} team={team} reloadTeam={reloadTeam} reloadLeads={reloadLeads} isMobile={isMobile}/>}
+    </div>
+  )
+  if(!lead) return <div>{bar}<div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:24,color:C.muted}}>This lead isn't available anymore (it may have been deleted). Skip to the next one.</div></div>
+
+  const g = gradeLetter(scoreOf(lead)), st = stageOf(lead, activity)
+  const camp = campaignName(campaigns, campaignOf(lead))
+  const phone = (lead.phone||'').trim()
+  return (
+    <div>
+      {bar}
+      <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'1fr 1fr',gap:16,alignItems:'start'}}>
+        <div style={{display:'flex',flexDirection:'column',gap:16,minWidth:0}}>
+          <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:20}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12}}>
+              <div style={{minWidth:0}}>
+                <div style={{fontSize:22,fontFamily:'Georgia,serif',fontWeight:600}}>{lead.name}</div>
+                <div style={{color:C.muted,fontSize:13,marginTop:3}}>{[lead.address,lead.city,lead.state].filter(Boolean).join(', ')}</div>
+                <div style={{color:C.muted,fontSize:12.5,marginTop:2}}>{lead.lead_type}{camp?' · '+camp:''}{st!=='new'?<span style={{color:STAGE[st].c,fontWeight:700}}> · {STAGE[st].l}</span>:null}</div>
+              </div>
+              <span style={{width:40,height:40,borderRadius:10,background:GRADE_C[g]+'22',color:GRADE_C[g],border:'1px solid '+GRADE_C[g],display:'flex',alignItems:'center',justifyContent:'center',fontWeight:800,fontSize:18,flexShrink:0,fontFamily:'Georgia,serif'}}>{g}</span>
+            </div>
+            {phone ?
+              <a href={'tel:'+phone.replace(/[^\d+]/g,'')} style={{display:'block',textAlign:'center',marginTop:14,background:C.green,color:C.ink,borderRadius:10,padding:'12px',fontWeight:800,fontSize:15,textDecoration:'none'}}>Call {phone}</a> :
+              <div style={{marginTop:14,color:C.amber,fontSize:12.5,background:C.amber+'14',border:'1px solid '+C.amber+'44',borderRadius:8,padding:'9px 11px'}}>No phone number on this lead — it needs skip tracing.</div>}
+          </div>
+          {editing
+            ? <IntelEditor lead={lead} onDone={()=>setEditing(false)} reloadLeads={reloadLeads}/>
+            : <CallCard lead={lead} onEdit={()=>setEditing(true)}/>}
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:16,minWidth:0}}>
+          <ScriptPanel lead={lead}/>
+          <LogCall lead={lead} activity={activity} reloadActivity={reloadActivity} reloadLeads={reloadLeads} onNext={onNext}/>
+          <HandoffPanel lead={lead} reloadLeads={reloadLeads}/>
+        </div>
+      </div>
     </div>
   )
 }
