@@ -331,7 +331,7 @@ function Upload({leads,campaigns,isMobile,onDone,card,inp,btn,cap}){
         </div>
 
         <div style={{marginTop:12,fontSize:12.5,color:C.cream,lineHeight:1.6}}>
-          {parsed.rows.length.toLocaleString()} rows found.{' '}
+          {parsed.rows.length.toLocaleString()} rows found{parsed.skippedTop?<span style={{color:C.muted}}> (skipped {parsed.skippedTop} title line{parsed.skippedTop===1?'':'s'} above the column headers)</span>:''}.{' '}
           {map.address ? <>Matched <b>{MAIN_FIELDS.filter(k=>map[k]).length}</b> key columns{map.phones.length?<>, <b>{map.phones.length}</b> phone column{map.phones.length===1?'':'s'}</>:<span style={{color:C.amber}}>, no phone columns (skip trace later)</span>}.</> : <span style={{color:C.amber}}>Couldn't find the property address column — pick it below.</span>}
           {built && built.skipped>0 && <span style={{color:C.amber}}> {built.skipped} rows have no address and will be skipped.</span>}
           {built && built.records.length<parsed.rows.length-built.skipped && <span style={{color:C.muted}}> {parsed.rows.length-built.skipped-built.records.length} duplicate rows merged.</span>}

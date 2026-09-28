@@ -59,13 +59,13 @@ const clean = v => String(v??'').trim()
 // ---------- column mapping ----------
 const P = '(property |site |situs )?'
 export const FIELDS = [
-  ['address','Property address',[new RegExp('^'+P+'(street )?address( line)?( 1)?$'), /^street( address)?$/]],
+  ['address','Property address',[new RegExp('^'+P+'(street )?address( line)?( 1)?$'), /^street( address)?$/, /^(parcel|location|situs|subject|full) (property )?address$/, /^(property )?location$/, /^property street$/]],
   ['unit','Unit',[new RegExp('^'+P+'unit( number)?$')]],
   ['city','City',[new RegExp('^'+P+'city$')]],
   ['state','State',[new RegExp('^'+P+'state$')]],
   ['zip','Zip',[new RegExp('^'+P+'zip( code)?( 5)?$'), /^postal code$/]],
   ['county','County',[new RegExp('^'+P+'county$')]],
-  ['owner','Owner full name',[/^owner( 1)?( full)? names?$/, /^owner$/, /^full name$/, /^name$/]],
+  ['owner','Owner full name',[/^owner( 1)?( full)? names?$/, /^owners?$/, /^(primary|current|record) owner( name)?$/, /^owner s$/, /^defendants?( names?)?$/, /^(borrower|grantor|decedent)s?( name)?$/, /^full name$/, /^name$/]],
   ['owner_first','Owner first name',[/^owner( 1)? first( name)?$/, /^first name$/]],
   ['owner_last','Owner last name',[/^owner( 1)? last( name)?$/, /^last name$/]],
   ['mail_address','Mailing address',[/^(owner )?mail(ing)? (street )?address( 1)?$/, /^owner address$/]],
@@ -99,12 +99,31 @@ export function autoMap(headers){
   return map
 }
 
+// Finds the real header row even when the file starts with a title/notes line
+// (common with Google Sheets / Excel exports), then returns rows as objects.
 export function parseCsv(file){
   return new Promise((resolve,reject)=>{
-    Papa.parse(file,{ header:true, skipEmptyLines:'greedy', transformHeader:h=>String(h).trim(),
-      complete:r=>resolve({ headers:(r.meta.fields||[]).filter(Boolean), rows:r.data }),
+    Papa.parse(file,{ header:false, skipEmptyLines:'greedy',
+      complete:r=>{ try{ resolve(tableFrom(r.data)) }catch(e){ reject(e) } },
       error:reject })
   })
+}
+const isKnown = h => { const n = normHeader(h); return !!n && (FIELDS.some(([,,res])=>res.some(re=>re.test(n))) || PHONE_RE.test(n) || EMAIL_RE.test(n)) }
+export function tableFrom(grid){
+  const rows = (grid||[]).map(r=>(r||[]).map(c=>String(c??'').trim())).filter(r=>r.some(Boolean))
+  if(!rows.length) return { headers:[], rows:[] }
+  let best = 0, bestScore = -1
+  for(let i=0; i<Math.min(25, rows.length); i++){
+    const filled = rows[i].filter(Boolean)
+    const score = filled.filter(isKnown).length*10 + (filled.length>=3 ? filled.length : 0)
+    if(score > bestScore){ best = i; bestScore = score }
+  }
+  const seen = {}
+  const headers = rows[best].map((h,i)=>{ let n = h || 'Column '+(i+1); if(seen[n]){ seen[n]++; n = n+' ('+seen[n]+')' } else seen[n]=1; return n })
+  const body = rows.slice(best+1)
+    .filter(r=>r.join('|')!==rows[best].join('|'))
+    .map(r=>Object.fromEntries(headers.map((h,i)=>[h, r[i]??''])))
+  return { headers, rows:body, skippedTop:best }
 }
 
 // CSV rows -> deduped property records (same address twice in one file = one record).
@@ -114,8 +133,13 @@ export function buildRecords(rows, map){
   for(const row of rows){
     const g = k => map[k] ? clean(row[map[k]]) : ''
     const unit = g('unit').replace(/^#\s*/,'')
-    const street = g('address') + (unit ? (/^(apt|unit|ste|suite|lot)\b/i.test(unit) ? ' '+unit : ' #'+unit) : '')
-    const key = addrKey(street, g('zip'), g('city'))
+    let street = g('address'), city = g('city'), st = g('state'), zip = g('zip')
+    // whole address in one cell: "123 Main St, Mount Holly, NJ 08060"
+    const full = street.match(/^(.+?),\s*([^,]+?),?\s+([A-Za-z]{2}|New Jersey|Florida|Delaware|Pennsylvania)\.?\s*(\d{5}(?:-\d{4})?)?$/)
+    if(full && (!city || !zip)){ street = full[1]; city = city || full[2]; st = st || full[3]; zip = zip || full[4] || '' }
+    else if(!zip){ const z = street.match(/\s(\d{5})(?:-\d{4})?$/); if(z){ zip = z[1]; street = street.slice(0, z.index).replace(/,\s*$/,'') } }
+    street = street + (unit ? (/^(apt|unit|ste|suite|lot)\b/i.test(unit) ? ' '+unit : ' #'+unit) : '')
+    const key = addrKey(street, zip, city)
     if(!key){ skipped++; continue }
     const owner = g('owner') || [g('owner_first'), g('owner_last')].filter(Boolean).join(' ')
     const mailing = [g('mail_address'), g('mail_city'), [g('mail_state'), g('mail_zip')].filter(Boolean).join(' ')].filter(Boolean).join(', ')
@@ -125,8 +149,8 @@ export function buildRecords(rows, map){
     for(const k of ['beds','baths','sqft','year_built','value','equity','loan','last_sale_amount']){ const n=num(g(k)); if(n!==null) data[k]=n }
     for(const k of ['last_sale_date','property_type']){ if(g(k)) data[k]=g(k) }
     if(data.value && data.equity!==undefined && data.loan===undefined) data.loan = Math.max(0, data.value - data.equity)
-    const rec = { addr_key:key, address:street.replace(/\s+/g,' ').trim(), city:g('city'), state:normState(g('state')),
-      zip:(g('zip').match(/\d{5}/)||[''])[0], county:g('county'), owner_name:owner, mailing, phones, emails, data }
+    const rec = { addr_key:key, address:street.replace(/\s+/g,' ').trim(), city, state:normState(st),
+      zip:(zip.match(/\d{5}/)||[''])[0], county:g('county'), owner_name:owner, mailing, phones, emails, data }
     const prev = out.get(key)
     out.set(key, prev ? mergeFields(prev, rec) : rec)
   }
