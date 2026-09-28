@@ -1,3 +1,4 @@
+import { fmtPhone } from './stacking'
 import { useState } from 'react'
 import { REPAIRS, detailsOf, money, compResult, stageOf, stageIdx, STAGE, OUTCOME_STAGE, moveStage, patchLead, callbackOf, callbackState, fmtWhen } from './leadModel'
 import { OUTCOMES, OUTCOME, logActivity, activityErr, getCaller, saveCaller } from './activity'
@@ -86,6 +87,12 @@ export function CallCard({lead,onEdit,onAnalyze}){
           <b style={{color:col}}>{st==='overdue'?'Callback overdue':st==='today'?'Callback today':'Callback scheduled'}</b> <span style={{color:C.cream}}>· {fmtWhen(cbk.at)}{cbk.by?' · set by '+cbk.by:''}</span>
           {cbk.note && <div style={{color:C.muted,marginTop:2}}>{cbk.note}</div>}
         </div> })()}
+      {(lead.details&&(lead.details.lists||[]).length>0) &&
+      <div style={{background:C.ink,borderRadius:10,padding:'9px 12px',marginBottom:12,fontSize:12.5,lineHeight:1.5}}>
+        <b style={{color:lead.details.lists.length>=3?C.orange:C.amber}}>On {lead.details.lists.length} list{lead.details.lists.length===1?'':'s'}:</b> <span style={{color:C.cream}}>{lead.details.lists.join(' · ')}</span>
+        {lead.details.lists.length>=2 && <div style={{color:C.muted,marginTop:2}}>Multiple distress signals — ask about each one ("I saw the taxes are behind — is that part of why you'd sell?").</div>}
+        {(lead.details.phones||[]).length>1 && <div style={{color:C.muted,marginTop:2}}>Other numbers: {lead.details.phones.slice(1).map(fmtPhone).join(', ')}</div>}
+      </div>}
       {cr &&
       <div style={{background:C.ink,borderRadius:10,padding:'11px 14px',marginBottom:12,display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
         <div><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>ARV{cr.confidence?' · '+cr.confidence:''}</div><div style={{color:C.cream,fontSize:14,fontWeight:700,marginTop:3}}>{money(cr.arv)}</div></div>

@@ -7,6 +7,8 @@ import { REPAIRS, BLANK_DETAILS, detailsOf, money, callbackOf, callbackState, eq
 import Pipeline from './Pipeline'
 import { CallCard, ScriptPanel, LogCall, HandoffPanel } from './LeadPanels'
 import VaWorkspace from './VaWorkspace'
+import ListStacking from './ListStacking'
+import { TYPE_NAMES } from './stacking'
 import { fetchTeam, teamErr as teamErrMsg, campaignOf, campaignName, getMe, setMe } from './team'
 import DealAnalyzer from './DealAnalyzer'
 import { fetchActivity, activityErr, tally, inLastDays } from './activity'
@@ -47,6 +49,7 @@ function friendlyErr(msg){
 
 const NAV = [
   ['leads','L','Leads'],
+  ['lists','S','List Stacking'],
   ['va','V','VA Workspace'],
   ['command','H','Command Center'],
   ['kpis','K','KPIs'],
@@ -142,6 +145,7 @@ export default function App(){
           {err && <ErrorBanner msg={err} onRetry={load} onClose={()=>setErr('')}/>}
           {view==='va' && <VaWorkspace leads={leads} activity={activity} campaigns={campaigns} team={team} teamErr={tErr} reloadTeam={loadTeam} reloadLeads={reloadQuiet} reloadActivity={loadActivity} meId={meId} onMe={onMe} isMobile={isMobile}/>}
           {view==='leads' && <LeadsPage key={focusId||'all'} initialSel={focusId} campaigns={campaigns} leads={leads} loading={loading} reload={load} reloadQuiet={reloadQuiet} loadErr={err} activity={activity} reloadActivity={loadActivity} onAnalyze={analyzeLead} isMobile={isMobile}/>}
+          {view==='lists' && <ListStacking leads={leads} campaigns={campaigns} reloadLeads={reloadQuiet} openLead={openLead} isMobile={isMobile}/>}
           {view==='comping' && <DealAnalyzer key={analyzeId||'blank'} leads={leads} initialLeadId={analyzeId} reload={load} isMobile={isMobile}/>}
           {view==='academy' && <AcademyPage isMobile={isMobile}/>}
           {view==='command' && <CommandCenter leads={leads} activity={activity} reload={reloadQuiet} openLead={openLead} isMobile={isMobile} goTo={go}/>}
@@ -243,7 +247,7 @@ function LeadsPage({leads,campaigns=[],loading,reload,reloadQuiet,loadErr,activi
           <In ph="Address" v={form.address} on={v=>set('address',v)}/>
           <In ph="City" v={form.city} on={v=>set('city',v)}/>
           <Sel v={form.state} on={v=>set('state',v)} opts={['NJ','FL','DE','PA','Other']}/>
-          <Sel v={form.lead_type} on={v=>set('lead_type',v)} opts={['Lis Pendens','Pre-Foreclosure','Tax Delinquent','Vacant','Inherited','Divorce']}/>
+          <Sel v={form.lead_type} on={v=>set('lead_type',v)} opts={[...new Set(['Lis Pendens','Pre-Foreclosure','Tax Delinquent','Vacant','Inherited','Divorce',...TYPE_NAMES, form.lead_type].filter(Boolean))]}/>
           {campaigns.length>0 &&
           <select value={form.details.campaign||''} onChange={e=>setD('campaign',e.target.value)} style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'10px 12px',color:form.details.campaign?C.cream:C.muted,fontSize:13,width:'100%',boxSizing:'border-box'}}>
             <option value="">Campaign (county)...</option>
@@ -323,6 +327,7 @@ function LeadsPage({leads,campaigns=[],loading,reload,reloadQuiet,loadErr,activi
                   <div style={{display:'flex',gap:6,marginTop:8,flexWrap:'wrap'}}>
                     {(()=>{ const st=stageOf(l,activity); return st!=='new' ? <Tag c={STAGE[st].c}>{STAGE[st].l}</Tag> : null })()}
                     {(()=>{ const cs=callbackState(callbackOf(l)); return cs && cs!=='later' ? <Tag c={cs==='overdue'?C.red:C.amber}>{cs==='overdue'?'Callback overdue':'Callback today'}</Tag> : null })()}
+                    {(l.details&&l.details.stack>1) && <Tag c={l.details.stack>=4?C.red:l.details.stack===3?C.orange:C.amber}>On {l.details.stack} lists</Tag>}
                     {campaignOf(l) && campaignName(campaigns,campaignOf(l)) && <Tag c={C.muted}>{campaignName(campaigns,campaignOf(l))}</Tag>}
                     <Tag c={C.blue}>{freshLabel(l.freshness)}</Tag>
                     {l.times_contacted===0? <Tag c={C.green}>Never called</Tag> : <Tag c={l.times_contacted<=1?C.amber:C.red}>{l.times_contacted}x called</Tag>}
