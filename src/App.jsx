@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { supabase } from './supabaseClient'
 import AcademyPage from './AcademyPage'
-import CommandCenter from './CommandCenter'
+import TodayPage from './TodayPage'
 import KpiPage from './KpiPage'
 import { REPAIRS, BLANK_DETAILS, detailsOf, money, callbackOf, callbackState, eqOf, scoreOf, stageOf, STAGE } from './leadModel'
 import Pipeline from './Pipeline'
@@ -48,10 +48,10 @@ function friendlyErr(msg){
 }
 
 const NAV = [
+  ['today','T','Today'],
   ['leads','L','Leads'],
   ['lists','S','List Stacking'],
   ['va','V','VA Workspace'],
-  ['command','H','Command Center'],
   ['kpis','K','KPIs'],
   ['pipeline','P','Pipeline'],
   ['comping','D','Deal Analyzer'],
@@ -60,7 +60,7 @@ const NAV = [
 
 export default function App(){
   const isMobile = useIsMobile()
-  const [page,setPage] = useState(()=>{ const m=getMe(); return m && m!=='owner' ? 'va' : 'leads' })
+  const [page,setPage] = useState(()=>{ const m=getMe(); return m && m!=='owner' ? 'va' : 'today' })
   const [meId,setMeId] = useState(getMe())
   const onMe = id => { setMe(id); setMeId(id) }
   const [menuOpen,setMenuOpen] = useState(false)
@@ -75,6 +75,7 @@ export default function App(){
   const [team,setTeam] = useState([])
   const [tErr,setTErr] = useState('')
   const reloadQuiet = ()=>load(true)
+  const reloadAll = useCallback(()=>{ load(true); loadActivity() },[])  // eslint-disable-line
 
   useEffect(()=>{ load(); loadActivity(); loadTeam() },[])
   async function loadTeam(){
@@ -148,7 +149,7 @@ export default function App(){
           {view==='lists' && <ListStacking leads={leads} campaigns={campaigns} reloadLeads={reloadQuiet} openLead={openLead} isMobile={isMobile}/>}
           {view==='comping' && <DealAnalyzer key={analyzeId||'blank'} leads={leads} initialLeadId={analyzeId} reload={load} isMobile={isMobile}/>}
           {view==='academy' && <AcademyPage isMobile={isMobile}/>}
-          {view==='command' && <CommandCenter leads={leads} activity={activity} reload={reloadQuiet} openLead={openLead} isMobile={isMobile} goTo={go}/>}
+          {view==='today' && <TodayPage leads={leads} activity={activity} team={team} campaigns={campaigns} reload={reloadAll} openLead={openLead} goTo={go} isMobile={isMobile}/>}
           {view==='kpis' && <KpiPage leads={leads} campaigns={campaigns} activity={activity} actErr={actErr} reload={loadActivity} isMobile={isMobile} goTo={go}/>}
           {view==='pipeline' && <Pipeline leads={leads} activity={activity} reload={reloadQuiet} openLead={openLead} analyze={analyzeLead} isMobile={isMobile}/>}
         </div>
