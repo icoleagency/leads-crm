@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { CoachingInbox, EodReport, LiveTeam, EodReview, CoachPanel, SetupNotice } from './VaTools'
+import { fetchReports, fetchNotes, vaToolsErr } from './vaTools'
 import { STAGE, stageOf, scoreOf, gradeLetter, patchLead, callbackOf, callbackState, fmtWhen, fmtTime, money } from './leadModel'
 import { tally, inLastDays, pct, saveCaller, dailySeries, OUTCOME } from './activity'
 import DailyBars from './DailyBars'
 import { saveCampaign, deleteCampaign, saveMember, deleteMember, campaignOf, campaignName, openHandoff } from './team'
-import { CallCard, ScriptPanel, LogCall, HandoffPanel, IntelEditor } from './LeadPanels'
+import { CallCard, ScriptPanel, LogCall, HandoffPanel, IntelEditor, PeoplePanel } from './LeadPanels'
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -21,6 +23,20 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
   const [histFor,setHistFor] = useState('')
   const me = team.find(m=>String(m.id)===meId) || null
   const ownerView = meId==='owner' || !me
+  const [reports,setReports] = useState([])
+  const [notes,setNotes] = useState([])
+  const [toolsErr,setToolsErr] = useState('')
+  const loadTools = useCallback(async ()=>{
+    try{ const [r,n] = await Promise.all([fetchReports(14), fetchNotes()]); setReports(r||[]); setNotes(n||[]); setToolsErr('') }
+    catch(e){ setToolsErr(vaToolsErr(e.message)) }
+  },[])
+  useEffect(()=>{ loadTools() },[loadTools])
+  // keep the live view fresh: calls, reports and notes every minute
+  useEffect(()=>{
+    if(work) return
+    const t = setInterval(()=>{ loadTools(); if(ownerView) reloadActivity() }, 60000)
+    return ()=>clearInterval(t)
+  },[work, ownerView, loadTools, reloadActivity])
 
   function pickMe(id){
     onMe(id); setWork(null)
@@ -115,6 +131,8 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
         {!showManage && <button onClick={()=>setShowManage(true)} style={{marginTop:12,background:C.orange,color:C.ink,border:'none',borderRadius:8,padding:'9px 16px',fontWeight:800,fontSize:12,cursor:'pointer'}}>Set up team & campaigns</button>}
       </div>}
 
+      {toolsErr==='setup' && (me || ownerView) && team.length>0 && <SetupNotice/>}
+      {me && toolsErr!=='setup' && <CoachingInbox me={me} notes={notes} reload={loadTools}/>}
       {me && mine &&
       <div>
         <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(5,1fr)',gap:10,marginTop:16}}>
@@ -176,9 +194,11 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
             )})}
           </div>
         </div>
+        {toolsErr!=='setup' && <EodReport key={me.id} me={me} activity={activity} leads={leads} reports={reports} reload={loadTools} isMobile={isMobile}/>}
         <Performance member={me} activity={activity} leads={leads} onOpen={id=>{ setWork({ ids:[id], i:0 }); window.scrollTo({top:0}) }} isMobile={isMobile}/>
       </div>}
 
+      {ownerView && team.length>0 && <LiveTeam team={team} activity={activity} leads={leads} reports={reports} isMobile={isMobile}/>}
       {ownerView && team.length>0 &&
       <div style={{...card,marginTop:16}}>
         <div style={{fontWeight:700,fontSize:14,marginBottom:10}}>Team today <span style={{color:C.muted,fontWeight:400,fontSize:12}}>— ranked by dials this week</span></div>
@@ -213,6 +233,8 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
           <Performance member={m} activity={activity} leads={leads} isMobile={isMobile}/>
         </div> })()}
 
+      {ownerView && team.length>0 && toolsErr!=='setup' && <EodReview team={team} reports={reports} isMobile={isMobile}/>}
+      {ownerView && team.length>0 && toolsErr!=='setup' && <CoachPanel team={team} notes={notes} reload={loadTools}/>}
       {ownerView && <div style={{marginTop:16}}>
         <button onClick={()=>setShowManage(!showManage)} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'8px 14px',fontSize:12.5,fontWeight:600,cursor:'pointer'}}>{showManage?'Hide':'Manage'} team & campaigns</button>
       </div>}
@@ -312,6 +334,7 @@ function LeadWork({lead,idx,total,onBack,onPrev,onNext,activity,reloadActivity,r
           {editing
             ? <IntelEditor lead={lead} onDone={()=>setEditing(false)} reloadLeads={reloadLeads}/>
             : <CallCard lead={lead} onEdit={()=>setEditing(true)}/>}
+          <PeoplePanel lead={lead} reloadLeads={reloadLeads}/>
         </div>
         <div style={{display:'flex',flexDirection:'column',gap:16,minWidth:0}}>
           <ScriptPanel lead={lead}/>

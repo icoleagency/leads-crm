@@ -1,9 +1,95 @@
 import { fmtPhone } from './stacking'
 import { useState } from 'react'
-import { REPAIRS, detailsOf, money, compResult, stageOf, stageIdx, STAGE, OUTCOME_STAGE, moveStage, patchLead, callbackOf, callbackState, fmtWhen } from './leadModel'
+import { PILLARS, researchLinks, REPAIRS, detailsOf, money, compResult, stageOf, stageIdx, STAGE, OUTCOME_STAGE, moveStage, patchLead, callbackOf, callbackState, fmtWhen } from './leadModel'
 import { OUTCOMES, OUTCOME, logActivity, activityErr, getCaller, saveCaller } from './activity'
 
 // Shared lead panels used on both the Leads page and the VA Workspace.
+
+const OCC = ['Unknown','Owner occupied','Tenant','Vacant']
+const TIMELINES = ['Unsure','ASAP','30 days','60 days','90+ days','Just testing market']
+const REASONS = ['Unknown','Foreclosure','Tax delinquent','Inherited / probate','Divorce','Tired landlord','Relocation','Vacant / repairs','Other']
+const CONDITIONS = ['Move-in ready','Needs updates','Major repairs','Tear-down']
+const ROLES = ['Spouse','Co-owner','Heir','Executor','Attorney','Tenant','Relative','Other']
+
+export function ResearchLinks({lead}){
+  const links = researchLinks(lead)
+  if(!links.length) return null
+  return (
+    <div style={{marginTop:14,paddingTop:12,borderTop:'1px solid '+C.line}}>
+      <div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1,marginBottom:7}}>Look it up — opens in a new tab</div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+        {links.map(([l,u])=><a key={l} href={u} target="_blank" rel="noopener noreferrer" style={{background:C.ink,border:'1px solid '+C.line,color:C.cream,borderRadius:8,padding:'6px 10px',fontSize:12,fontWeight:600,textDecoration:'none',whiteSpace:'nowrap'}}>{l} ↗</a>)}
+      </div>
+    </div>
+  )
+}
+
+// ---- people on the deal: spouse, heirs, co-owners, and who actually decides ----
+export function PeoplePanel({lead,reloadLeads}){
+  const people = (lead.details && lead.details.people) || []
+  const blank = { name:'', role:'Spouse', phone:'', decides:false, note:'' }
+  const [form,setForm] = useState(null)      // null = closed; {…, idx} = editing / adding
+  const [busy,setBusy] = useState(false)
+  const [err,setErr] = useState('')
+  async function save(list){
+    setBusy(true); setErr('')
+    try{ await patchLead(lead, { people:list }); setForm(null); if(reloadLeads) await reloadLeads() }
+    catch(e){ setErr(/fetch/i.test(e.message)?"Can't reach the database — try again in a minute.":e.message) }
+    setBusy(false)
+  }
+  function submit(){
+    const p = { name:form.name.trim(), role:form.role, phone:form.phone.trim(), decides:!!form.decides, note:form.note.trim() }
+    if(!p.name) return
+    let list = form.idx===undefined ? [...people, p] : people.map((x,i)=>i===form.idx?p:x)
+    if(p.decides) list = list.map(x=>x===p?x:{...x, decides:false})
+    save(list)
+  }
+  const inp = {background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'8px 10px',color:C.cream,fontSize:13,outline:'none',width:'100%',minWidth:0,boxSizing:'border-box'}
+  const ownerDecides = !people.some(p=>p.decides)
+  return (
+    <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:20}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,marginBottom:10}}>
+        <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:1}}>People on this deal</div>
+        {!form && <button onClick={()=>setForm({...blank})} style={{background:'transparent',border:'1px solid '+C.orange,color:C.orange,borderRadius:8,padding:'5px 11px',fontSize:11.5,fontWeight:700,cursor:'pointer'}}>+ Add person</button>}
+      </div>
+      <div style={{display:'flex',justifyContent:'space-between',gap:10,padding:'6px 0',borderBottom:'1px solid '+C.line,fontSize:13}}>
+        <span><b>{lead.name||'Owner'}</b> <span style={{color:C.muted}}>· Owner on record</span></span>
+        {ownerDecides && people.length>0 && <span style={{color:C.green,fontSize:11.5,fontWeight:700}}>Decision maker</span>}
+      </div>
+      {people.map((p,i)=>(
+        <div key={i} style={{padding:'7px 0',borderBottom:'1px solid '+C.line,fontSize:13}}>
+          <div style={{display:'flex',justifyContent:'space-between',gap:10,alignItems:'center'}}>
+            <span style={{minWidth:0}}><b>{p.name}</b> <span style={{color:C.muted}}>· {p.role}</span></span>
+            <span style={{display:'flex',gap:8,alignItems:'center',flexShrink:0}}>
+              {p.decides && <span style={{color:C.green,fontSize:11.5,fontWeight:700}}>Decision maker</span>}
+              <span onClick={()=>setForm({...blank,...p,idx:i})} style={{color:C.muted,fontSize:11.5,cursor:'pointer'}}>Edit</span>
+              <span onClick={()=>{ if(confirm('Remove '+p.name+'?')) save(people.filter((_,j)=>j!==i)) }} style={{color:C.muted,fontSize:11.5,cursor:'pointer'}}>Remove</span>
+            </span>
+          </div>
+          {(p.phone||p.note) && <div style={{fontSize:12,marginTop:2}}>{p.phone && <a href={'tel:'+p.phone.replace(/[^\d+]/g,'')} style={{color:C.green,textDecoration:'none',marginRight:8}}>{p.phone}</a>}{p.note && <span style={{color:C.muted}}>{p.note}</span>}</div>}
+        </div>
+      ))}
+      {people.length===0 && !form && <div style={{color:C.muted,fontSize:12.5,lineHeight:1.5,marginTop:8}}>Anyone else involved — spouse, co-owner, heirs, executor, attorney? Add them, and mark who actually makes the call. On probate, divorce and foreclosure deals it's often not the person on the record.</div>}
+      {form &&
+      <div style={{marginTop:10,display:'grid',gap:7}}>
+        <div style={{display:'grid',gridTemplateColumns:'1.3fr 1fr',gap:7}}>
+          <input autoFocus value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Name" style={inp}/>
+          <select value={form.role} onChange={e=>setForm({...form,role:e.target.value})} style={inp}>{ROLES.map(r=><option key={r}>{r}</option>)}</select>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1.3fr',gap:7}}>
+          <input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="Phone (optional)" style={inp}/>
+          <input value={form.note} onChange={e=>setForm({...form,note:e.target.value})} placeholder="Note — e.g. lives out of state, wants to sell" style={inp}/>
+        </div>
+        <label style={{display:'flex',gap:7,alignItems:'center',fontSize:12.5,color:C.cream,cursor:'pointer'}}><input type="checkbox" checked={form.decides} onChange={e=>setForm({...form,decides:e.target.checked})}/>This person makes the decision</label>
+        <div style={{display:'flex',gap:8}}>
+          <button disabled={busy||!form.name.trim()} onClick={submit} style={{background:C.orange,color:C.ink,border:'none',borderRadius:8,padding:'8px 14px',fontSize:12,fontWeight:800,cursor:'pointer',opacity:(busy||!form.name.trim())?0.5:1}}>{busy?'Saving…':'Save'}</button>
+          <button onClick={()=>setForm(null)} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'8px 12px',fontSize:12,cursor:'pointer'}}>Cancel</button>
+        </div>
+      </div>}
+      {err && <div style={{color:C.red,fontSize:12.5,marginTop:8}}>{err}</div>}
+    </div>
+  )
+}
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -64,12 +150,13 @@ export function CallCard({lead,onEdit,onAnalyze}){
   const arv = Number(lead.arv)||0
   const ceiling = cr ? cr.walk : arv ? Math.max(0, Math.round(arv*0.70 - hi - 15000)) : 0
   const facts = []
+  if(d.condition) facts.push(d.condition)
   if(d.occupancy!=='Unknown') facts.push(d.occupancy)
   if(d.beds) facts.push(d.beds+'bd')
   if(d.baths) facts.push(d.baths+'ba')
   if(d.sqft) facts.push(Number(d.sqft).toLocaleString()+' sqft')
   if(d.year_built) facts.push('built '+d.year_built)
-  const empty = facts.length===0 && flagged.length===0 && !ask && d.sell_reason==='Unknown' && d.timeline==='Unsure' && !d.seller_notes && !d.repair_notes
+  const empty = facts.length===0 && flagged.length===0 && !ask && !d.price_open && d.sell_reason==='Unknown' && d.timeline==='Unsure' && !d.seller_notes && !d.repair_notes
 
   return (
     <div style={{background:C.panel,border:'1px solid '+C.orange+'66',borderRadius:16,padding:22}}>
@@ -87,6 +174,12 @@ export function CallCard({lead,onEdit,onAnalyze}){
           <b style={{color:col}}>{st==='overdue'?'Callback overdue':st==='today'?'Callback today':'Callback scheduled'}</b> <span style={{color:C.cream}}>· {fmtWhen(cbk.at)}{cbk.by?' · set by '+cbk.by:''}</span>
           {cbk.note && <div style={{color:C.muted,marginTop:2}}>{cbk.note}</div>}
         </div> })()}
+      {(()=>{ const ppl = (lead.details&&lead.details.people)||[]; if(!ppl.length) return null
+        const dm = ppl.find(p=>p.decides)
+        return <div style={{background:C.ink,borderRadius:10,padding:'9px 12px',marginBottom:12,fontSize:12.5,lineHeight:1.5}}>
+          {dm ? <div><b style={{color:C.green}}>Decision maker:</b> <span style={{color:C.cream}}>{dm.name} ({dm.role.toLowerCase()}){dm.phone?' · '+dm.phone:''}</span></div> : <div><b style={{color:C.green}}>Decision maker:</b> <span style={{color:C.cream}}>{lead.name} (owner on record)</span></div>}
+          {ppl.filter(p=>p!==dm).length>0 && <div style={{color:C.muted}}>Also involved: {ppl.filter(p=>p!==dm).map(p=>p.name+' ('+p.role.toLowerCase()+')').join(', ')}</div>}
+        </div> })()}
       {(lead.details&&(lead.details.lists||[]).length>0) &&
       <div style={{background:C.ink,borderRadius:10,padding:'9px 12px',marginBottom:12,fontSize:12.5,lineHeight:1.5}}>
         <b style={{color:lead.details.lists.length>=3?C.orange:C.amber}}>On {lead.details.lists.length} list{lead.details.lists.length===1?'':'s'}:</b> <span style={{color:C.cream}}>{lead.details.lists.join(' · ')}</span>
@@ -100,8 +193,14 @@ export function CallCard({lead,onEdit,onAnalyze}){
         <div><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>Offer range</div><div style={{color:C.orange,fontSize:14,fontWeight:700,marginTop:3}}>{money(cr.open)}–{money(cr.walk)}</div></div>
       </div>}
 
+      {(()=>{ const missing = PILLARS.filter(([,,ok])=>!ok(d)); return (
+        <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginBottom:12,fontSize:12}}>
+          <span style={{color:C.muted}}>4 pillars:</span>
+          {PILLARS.map(([k,l,ok])=><span key={k} style={{color:ok(d)?C.green:C.muted,border:'1px solid '+(ok(d)?C.green+'66':C.line),borderRadius:12,padding:'1px 8px',fontWeight:600}}>{ok(d)?'✓ ':''}{l}</span>)}
+          {missing.length>0 && <span style={{color:C.amber}}>— still need {missing.map(m=>m[1].toLowerCase()).join(', ')}</span>}
+        </div>) })()}
       {empty && !cr ?
-      <div style={{color:C.muted,fontSize:13,lineHeight:1.55}}>No intel on this property yet. Hit <span style={{color:C.orange,fontWeight:700}}>Update</span> and fill in the condition, asking price and seller situation before the next call — that's your leverage.</div>
+      <div style={{color:C.muted,fontSize:13,lineHeight:1.55}}>No intel on this property yet. Tap the pillars in <span style={{color:C.orange,fontWeight:700}}>Log this call</span> while you talk, or hit <span style={{color:C.orange,fontWeight:700}}>Update</span> to fill in the condition, asking price and seller situation — that's your leverage.</div>
       :
       <div>
         {facts.length>0 && <div style={{color:C.cream,fontSize:13,marginBottom:12}}>{facts.join(' · ')}</div>}
@@ -117,7 +216,7 @@ export function CallCard({lead,onEdit,onAnalyze}){
           </div>
           <div style={{background:C.ink,borderRadius:10,padding:'10px 12px'}}>
             <div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>Asking</div>
-            <div style={{color:ask?C.cream:C.muted,fontSize:13,fontWeight:600,marginTop:3}}>{ask?money(ask):'—'}</div>
+            <div style={{color:ask||d.price_open?C.cream:C.muted,fontSize:13,fontWeight:600,marginTop:3}}>{ask?money(ask):d.price_open?'Wants an offer':'—'}</div>
           </div>
         </div>
 
@@ -144,6 +243,7 @@ export function CallCard({lead,onEdit,onAnalyze}){
         {d.repair_notes && <div style={{marginBottom:8}}><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>Condition notes</div><div style={{color:C.cream,fontSize:13,lineHeight:1.5}}>{d.repair_notes}</div></div>}
         {d.seller_notes && <div><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1,marginBottom:4}}>Seller notes</div><div style={{color:C.cream,fontSize:13,lineHeight:1.5}}>{d.seller_notes}</div></div>}
       </div>}
+      <ResearchLinks lead={lead}/>
     </div>
   )
 }
@@ -258,6 +358,15 @@ export function LogCall({lead,activity,reloadActivity,reloadLeads,onNext}){
   const [msg,setMsg] = useState(null)
   const [cb,setCb] = useState('')          // ISO time for a new callback, '' = none
   const [cbPick,setCbPick] = useState(false)
+  // 4-pillar quick capture: edits are held here and saved with the logged call (or with "Save seller info")
+  const [pill,setPill] = useState({})
+  const [pillOpen,setPillOpen] = useState(()=>{ try{ return localStorage.getItem('wos_pillars')!=='0' }catch{ return true } })
+  const base = detailsOf(lead)
+  const cur = {...base, ...pill, repairs: pill.repairs || base.repairs}
+  const dirty = Object.keys(pill).length>0
+  const setP = (k,v) => setPill(x=>({...x,[k]:v}))
+  const intelPatch = () => { const p = {...pill}; if('asking_price' in p) p.asking_price = Number(String(p.asking_price).replace(/[$,]/g,''))||null; return p }
+  const togglePillOpen = () => { const v=!pillOpen; setPillOpen(v); try{ localStorage.setItem('wos_pillars', v?'1':'0') }catch{ /* storage unavailable */ } }
   const history = activity.filter(a=>a.lead_id===String(lead.id)).slice(0,6)
   const existingCb = callbackOf(lead)
   const at = (days,h) => { const d=new Date(); d.setDate(d.getDate()+days); d.setHours(h,0,0,0); return d.toISOString() }
@@ -274,7 +383,7 @@ export function LogCall({lead,activity,reloadActivity,reloadLeads,onNext}){
       let moved = ''
       try{
         const cur = stageOf(lead, activity), target = OUTCOME_STAGE[outcome]
-        const extra = {}
+        const extra = dirty ? intelPatch() : {}
         const prevDeal = (lead.details && lead.details.deal) || {}
         if(outcome==='closed' && Number(amount)) extra.deal = {...prevDeal, fee:Number(amount), closing_date:prevDeal.closing_date||new Date().toISOString().slice(0,10)}
         if(outcome==='offer' && Number(amount)) extra.deal = {...prevDeal, last_offer:Number(amount)}
@@ -285,14 +394,24 @@ export function LogCall({lead,activity,reloadActivity,reloadLeads,onNext}){
         if(forward){ await moveStage(lead, target, extra); moved = ' · moved to '+STAGE[target].l+' in Pipeline' }
         else if(Object.keys(extra).length){ await patchLead(lead, extra) }
         if(extra.callback) moved += ' · callback set for '+fmtWhen(extra.callback.at)
+        if(dirty) moved += ' · seller info saved'
         if((forward || Object.keys(extra).length) && reloadLeads) reloadLeads()
       }catch{ moved = ' · (pipeline stage not updated — try moving it on the Pipeline page)' }
-      setMsg({ok:true,t:'Logged: '+o.label+moved}); setNote(''); setPending(null); setAmount(''); setCb(''); setCbPick(false)
+      setMsg({ok:true,t:'Logged: '+o.label+moved}); setNote(''); setPending(null); setAmount(''); setCb(''); setCbPick(false); setPill({})
       reloadActivity()
     }catch(e){ setMsg({ok:false,t:activityErr(e.message)}) }
     setBusy(false)
   }
   const when = iso => { const d=new Date(iso); const t=d.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}); return d.toDateString()===new Date().toDateString() ? 'Today '+t : d.toLocaleDateString([], {month:'short',day:'numeric'})+' '+t }
+  async function saveIntelOnly(){
+    setBusy(true); setMsg(null)
+    try{ await patchLead(lead, intelPatch()); setPill({}); setMsg({ok:true,t:'Seller info saved to the Call Card.'}); if(reloadLeads) reloadLeads() }
+    catch(e){ setMsg({ok:false,t:/fetch/i.test(e.message)?"Can't reach the database — try again in a minute.":e.message}) }
+    setBusy(false)
+  }
+  const chip = (on, label, onClick, col=C.orange) => <button key={label} type="button" onClick={onClick} style={{background:on?col:'transparent',color:on?C.ink:C.muted,border:'1px solid '+(on?col:C.line),borderRadius:14,padding:'4px 10px',fontSize:11.5,fontWeight:600,cursor:'pointer'}}>{label}</button>
+  const done = PILLARS.map(([k,l,ok,q])=>({k,l,ok:ok(cur),q}))
+  const nextMissing = done.find(p=>!p.ok)
 
   return (
     <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:22}}>
@@ -301,6 +420,51 @@ export function LogCall({lead,activity,reloadActivity,reloadLeads,onNext}){
         <label style={{display:'flex',alignItems:'center',gap:6,color:C.muted,fontSize:11}}>Caller
           <input value={caller} onChange={e=>setCaller(e.target.value)} onBlur={()=>saveCaller(caller)} placeholder="your name" style={{background:C.ink,border:'1px solid '+C.line,borderRadius:6,padding:'5px 8px',color:C.cream,fontSize:12,outline:'none',width:110}}/>
         </label>
+      </div>
+      <div style={{background:C.ink,border:'1px solid '+(dirty?C.orange+'88':C.line),borderRadius:12,padding:'10px 12px',marginBottom:12}}>
+        <div onClick={togglePillOpen} style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,cursor:'pointer',flexWrap:'wrap'}}>
+          <span style={{fontSize:12,fontWeight:700,color:C.cream}}>Seller info <span style={{color:C.muted,fontWeight:400}}>— tap while you talk</span></span>
+          <span style={{display:'flex',gap:4,alignItems:'center'}}>
+            {done.map(p=><span key={p.k} title={p.l} style={{fontSize:10.5,fontWeight:700,color:p.ok?C.green:C.muted,border:'1px solid '+(p.ok?C.green+'66':C.line),borderRadius:10,padding:'1px 7px'}}>{p.ok?'✓ ':''}{p.l}</span>)}
+            <span style={{color:C.muted,fontSize:12,marginLeft:4}}>{pillOpen?'▴':'▾'}</span>
+          </span>
+        </div>
+        {pillOpen && <div style={{marginTop:10,display:'grid',gap:9}}>
+          <div>
+            <div style={{color:C.muted,fontSize:10.5,textTransform:'uppercase',letterSpacing:1,marginBottom:5}}>Condition</div>
+            <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+              {CONDITIONS.map(c=>chip(cur.condition===c, c, ()=>setP('condition', cur.condition===c?'':c)))}
+              <span style={{width:6}}/>
+              {OCC.filter(o=>o!=='Unknown').map(o=>chip(cur.occupancy===o, o, ()=>setP('occupancy', cur.occupancy===o?'Unknown':o), C.blue))}
+            </div>
+            <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:5}}>
+              {REPAIRS.map(([k,l])=>chip(!!cur.repairs[k], l, ()=>setP('repairs', {...cur.repairs, [k]:!cur.repairs[k]}), C.amber))}
+            </div>
+          </div>
+          <div>
+            <div style={{color:C.muted,fontSize:10.5,textTransform:'uppercase',letterSpacing:1,marginBottom:5}}>Why selling</div>
+            <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>{REASONS.filter(r=>r!=='Unknown').map(r=>chip(cur.sell_reason===r, r, ()=>setP('sell_reason', cur.sell_reason===r?'Unknown':r)))}</div>
+          </div>
+          <div>
+            <div style={{color:C.muted,fontSize:10.5,textTransform:'uppercase',letterSpacing:1,marginBottom:5}}>Timeline</div>
+            <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>{TIMELINES.filter(t=>t!=='Unsure').map(t=>chip(cur.timeline===t, t, ()=>setP('timeline', cur.timeline===t?'Unsure':t)))}</div>
+          </div>
+          <div>
+            <div style={{color:C.muted,fontSize:10.5,textTransform:'uppercase',letterSpacing:1,marginBottom:5}}>Price</div>
+            <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+              <input type="number" value={cur.asking_price??''} onChange={e=>setP('asking_price', e.target.value)} placeholder="Asking $" style={{background:C.panel,border:'1px solid '+C.line,borderRadius:8,padding:'6px 9px',color:C.cream,fontSize:12.5,outline:'none',width:130}}/>
+              {chip(!!cur.price_open, 'Says "make me an offer"', ()=>setP('price_open', !cur.price_open))}
+            </div>
+          </div>
+          {nextMissing ?
+            <div style={{fontSize:12,lineHeight:1.45,color:C.cream,background:C.amber+'12',border:'1px solid '+C.amber+'44',borderRadius:8,padding:'7px 10px'}}><b style={{color:C.amber}}>Still need {nextMissing.l.toLowerCase()}:</b> {nextMissing.q}</div> :
+            <div style={{fontSize:12,color:C.green}}>All 4 pillars collected — you have what the closer needs.</div>}
+          {dirty && <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+            <span style={{color:C.orange,fontSize:11.5}}>Saves with the call you log below, or</span>
+            <button disabled={busy} onClick={saveIntelOnly} style={{background:'transparent',border:'1px solid '+C.orange,color:C.orange,borderRadius:8,padding:'4px 10px',fontSize:11.5,fontWeight:700,cursor:'pointer'}}>Save seller info now</button>
+            <span onClick={()=>setPill({})} style={{color:C.muted,fontSize:11.5,cursor:'pointer'}}>Undo</span>
+          </div>}
+        </div>}
       </div>
       <input value={note} onChange={e=>setNote(e.target.value)} placeholder="Quick note (optional) — e.g. wife decides, call after 5" style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'9px 12px',color:C.cream,fontSize:13,outline:'none',width:'100%',boxSizing:'border-box',marginBottom:10}}/>
       <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
@@ -344,9 +508,6 @@ export function LogCall({lead,activity,reloadActivity,reloadLeads,onNext}){
 
 
 const INTEL_REPAIRS = REPAIRS
-const OCC = ['Unknown','Owner occupied','Tenant','Vacant']
-const TIMELINES = ['Unsure','ASAP','30 days','60 days','90+ days','Just testing market']
-const REASONS = ['Unknown','Foreclosure','Tax delinquent','Inherited / probate','Divorce','Tired landlord','Relocation','Vacant / repairs','Other']
 
 // Compact editor for the Call Card facts (for VAs, who don't get the full lead form).
 export function IntelEditor({lead,onDone,reloadLeads}){

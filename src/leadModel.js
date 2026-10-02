@@ -107,3 +107,37 @@ export function callbackState(cb){
 }
 export const fmtWhen = iso => new Date(iso).toLocaleString([], {weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})
 export const fmtTime = iso => new Date(iso).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})
+
+// ---- the 4 pillars (condition, motivation, timeline, price) ----
+export const PILLARS = [
+  ['condition','Condition', d => !!d.condition || Object.values(d.repairs||{}).some(Boolean) || !!d.repair_notes,
+    '"If I walked in the front door today, what would I see? When was the roof done? HVAC? Hot water tank?"'],
+  ['motivation','Motivation', d => d.sell_reason && d.sell_reason!=='Unknown',
+    '"What has you thinking about selling? ... How long has that been going on?"'],
+  ['timeline','Timeline', d => d.timeline && d.timeline!=='Unsure',
+    '"If everything lined up, when would you want this done — 30 days, 60, or just exploring?"'],
+  ['price','Price', d => Number(d.asking_price)>0 || !!d.price_open,
+    '"If I could close on your timeline and you didn\'t fix a thing — what number works for you?"'],
+]
+export const pillarsDone = d => PILLARS.filter(([,,ok])=>ok(d)).length
+
+// ---- one-tap research links for the property ----
+export function researchLinks(lead){
+  const d = (lead && lead.details) || {}
+  const street = (lead.address||'').trim(); if(!street) return []
+  const city = lead.city||'', st = lead.state||'', zip = d.zip||''
+  const full = [street, city, [st, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ')
+  const g = q => 'https://www.google.com/search?q='+encodeURIComponent(q)
+  const county = d.county ? String(d.county).replace(/\s*county$/i,'')+' County' : ''
+  const type = String(lead.lead_type||'') + ' ' + ((d.lists||[]).join(' '))
+  const links = [
+    ['Map & Street View','https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(full)],
+    ['Zillow','https://www.zillow.com/homes/'+encodeURI(full.replace(/\s+/g,'-'))+'_rb/'],
+    ['Redfin', g(full+' redfin')],
+    ['Realtor.com', g(full+' realtor.com')],
+    ['Tax & owner records', g(full+' '+(county||city)+' property tax records')],
+  ]
+  if(/lis pendens|foreclos/i.test(type)) links.push(['Sheriff sale', g((county || city+' '+st)+' sheriff sale '+street)])
+  if(/probate|inherit/i.test(type)) links.push(['Obituary', g('"'+(lead.name||'')+'" obituary '+city)])
+  return links
+}

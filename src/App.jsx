@@ -5,7 +5,7 @@ import CommandCenter from './CommandCenter'
 import KpiPage from './KpiPage'
 import { REPAIRS, BLANK_DETAILS, detailsOf, money, callbackOf, callbackState, eqOf, scoreOf, stageOf, STAGE } from './leadModel'
 import Pipeline from './Pipeline'
-import { CallCard, ScriptPanel, LogCall, HandoffPanel } from './LeadPanels'
+import { CallCard, ScriptPanel, LogCall, HandoffPanel, PeoplePanel } from './LeadPanels'
 import VaWorkspace from './VaWorkspace'
 import ListStacking from './ListStacking'
 import { TYPE_NAMES } from './stacking'
@@ -370,6 +370,7 @@ function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,reloadLeads,on
         </div>
 
         <CallCard lead={lead} onEdit={onEdit} onAnalyze={onAnalyze}/>
+        <PeoplePanel lead={lead} reloadLeads={reloadLeads}/>
 
         <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:22}}>
           <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:1,marginBottom:16}}>Lead Quality Signals</div>
