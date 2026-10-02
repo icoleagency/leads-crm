@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { supabase } from './supabaseClient'
 import AcademyPage from './AcademyPage'
 import TodayPage from './TodayPage'
+import DispoPage from './DispoPage'
 import KpiPage from './KpiPage'
 import { REPAIRS, BLANK_DETAILS, detailsOf, money, callbackOf, callbackState, eqOf, scoreOf, stageOf, STAGE } from './leadModel'
 import Pipeline from './Pipeline'
@@ -54,6 +55,7 @@ const NAV = [
   ['va','V','VA Workspace'],
   ['kpis','K','KPIs'],
   ['pipeline','P','Pipeline'],
+  ['dispo','B','Buyers & Dispo'],
   ['comping','D','Deal Analyzer'],
   ['academy','A','Academy'],
 ]
@@ -71,6 +73,7 @@ export default function App(){
   const [actErr,setActErr] = useState('')
   const [analyzeId,setAnalyzeId] = useState('')
   const [focusId,setFocusId] = useState('')
+  const [dispoId,setDispoId] = useState('')
   const [campaigns,setCampaigns] = useState([])
   const [team,setTeam] = useState([])
   const [tErr,setTErr] = useState('')
@@ -95,8 +98,9 @@ export default function App(){
     try{ setActivity(await fetchActivity(90)); setActErr('') }
     catch(e){ setActErr(activityErr(e.message)) }
   }
-  const go = (p)=>{ if(p==='comping') setAnalyzeId(''); setPage(p); setMenuOpen(false) }
+  const go = (p)=>{ if(p==='comping') setAnalyzeId(''); if(p==='dispo') setDispoId(''); setPage(p); setMenuOpen(false) }
   const openLead = (id)=>{ setFocusId(String(id)); setPage('leads'); window.scrollTo({top:0}) }
+  const openDispo = (id)=>{ setDispoId(String(id||'')); setPage('dispo'); window.scrollTo({top:0}) }
   const analyzeLead = (id)=>{ setAnalyzeId(String(id)); setPage('comping'); window.scrollTo({top:0}) }
   const today = tally(inLastDays(activity,1))
   const meMember = team.find(m=>String(m.id)===meId)
@@ -149,7 +153,8 @@ export default function App(){
           {view==='lists' && <ListStacking leads={leads} campaigns={campaigns} reloadLeads={reloadQuiet} openLead={openLead} isMobile={isMobile}/>}
           {view==='comping' && <DealAnalyzer key={analyzeId||'blank'} leads={leads} initialLeadId={analyzeId} reload={load} isMobile={isMobile}/>}
           {view==='academy' && <AcademyPage isMobile={isMobile}/>}
-          {view==='today' && <TodayPage leads={leads} activity={activity} team={team} campaigns={campaigns} reload={reloadAll} openLead={openLead} goTo={go} isMobile={isMobile}/>}
+          {view==='today' && <TodayPage leads={leads} activity={activity} team={team} campaigns={campaigns} reload={reloadAll} openLead={openLead} goTo={go} openDispo={openDispo} isMobile={isMobile}/>}
+          {view==='dispo' && <DispoPage key={dispoId||'all'} leads={leads} activity={activity} reloadLeads={reloadQuiet} openLead={openLead} initialDeal={dispoId} isMobile={isMobile}/>}
           {view==='kpis' && <KpiPage leads={leads} campaigns={campaigns} activity={activity} actErr={actErr} reload={loadActivity} isMobile={isMobile} goTo={go}/>}
           {view==='pipeline' && <Pipeline leads={leads} activity={activity} reload={reloadQuiet} openLead={openLead} analyze={analyzeLead} isMobile={isMobile}/>}
         </div>

@@ -17,7 +17,7 @@ const fmtDay = s => { const d=new Date(s+'T12:00:00'); return isNaN(d)?s:d.toLoc
 const hoursAgo = iso => Math.floor((Date.now()-new Date(iso).getTime())/3600000)
 const waited = iso => { const h=hoursAgo(iso); return h<1?'just now':h<24?h+'h':Math.floor(h/24)+'d '+(h%24)+'h' }
 
-export default function TodayPage({leads,activity,team,campaigns,reload,openLead,goTo,isMobile}){
+export default function TodayPage({leads,activity,team,campaigns,reload,openLead,openDispo,goTo,isMobile}){
   const [reports,setReports] = useState([])
   const [replyFor,setReplyFor] = useState(null)
   const [replyText,setReplyText] = useState('')
@@ -176,6 +176,7 @@ export default function TodayPage({leads,activity,team,campaigns,reload,openLead
             </div>
             {slipShown.length===0 ? <div style={{color:C.muted,fontSize:13,padding:'6px 0'}}>Nothing slipping — every offer and contract has recent movement.</div> :
               slipShown.map((x,i)=><Item key={i} tag={x.tag} c={x.c} title={x.l.name} sub={[x.l.city,x.l.state].filter(Boolean).join(', ')} text={x.text} onOpen={()=>openLead(x.l.id)}>
+                {x.tag==='No buyer yet' && openDispo && <button onClick={()=>openDispo(x.l.id)} style={btn(true)}>Find buyers</button>}
                 <button onClick={()=>openLead(x.l.id)} style={btn(false)}>Open</button>
               </Item>)}
             {slipping.length>slipShown.length && <div style={{color:C.muted,fontSize:12,paddingTop:8}}>+ {slipping.length-slipShown.length} more on the Pipeline page</div>}
