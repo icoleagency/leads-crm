@@ -83,10 +83,17 @@ export const FIELDS = [
   ['last_sale_date','Last sale date',[/^last sale( recording)? date$/]],
   ['last_sale_amount','Last sale amount',[/^last sale (amount|price)$/]],
   ['property_type','Property type',[/^property type$/]],
+  ['record_date','Filing / record date',[/^(record|recording|recorded|filing|filed|file|lis pendens|lp|document) date$/, /^date (filed|recorded)$/]],
+  ['case_number','Case / instrument #',[/^instrument( number| no)?$/, /^case( number| no)?$/, /^(document|doc) (number|no)$/, /^book page$/]],
+  ['occupancy','Occupancy',[/^occupancy$/, /^owner occupied$/]],
+  ['owner_type','Owner type',[/^(owner|lead|party) type$/]],
+  ['owner2','Second owner full name',[/^(owner 2|co ?owner|second owner|spouse)( full)? name$/]],
+  ['owner2_first','Second owner first name',[/^(owner 2|co ?owner|second owner|optional|spouse) first( name)?$/]],
+  ['owner2_last','Second owner last name',[/^(owner 2|co ?owner|second owner|optional|spouse) last( name)?$/]],
 ]
 export const MAIN_FIELDS = ['address','city','state','zip','owner','owner_first','owner_last','mail_address','value','loan']
 const normHeader = h => String(h||'').toLowerCase().replace(/\./g,'').replace(/#/g,' ').replace(/[^a-z0-9]+/g,' ').trim()
-const PHONE_RE = /^(owner |contact |skip |primary )?(phone|mobile|cell|landline|wireless)( ?\d+)?( number)?$/
+const PHONE_RE = /^(owner |contact |skip |primary |alt |alternate |other |home |work |cell |mobile |landline |wireless )*(phone|mobile|cell|landline|wireless)( ?\d+)?( number)?$/
 const EMAIL_RE = /^(owner |contact |primary )?e ?mail( ?\d+)?( address)?$/
 
 export function autoMap(headers){
@@ -148,7 +155,10 @@ export function buildRecords(rows, map){
     const emails = (map.emails||[]).map(h=>clean(row[h]).toLowerCase()).filter(e=>e.includes('@'))
     const data = {}
     for(const k of ['beds','baths','sqft','year_built','value','equity','loan','last_sale_amount']){ const n=num(g(k)); if(n!==null) data[k]=n }
-    for(const k of ['last_sale_date','property_type']){ if(g(k)) data[k]=g(k) }
+    for(const k of ['last_sale_date','property_type','record_date','case_number','owner_type']){ if(g(k)) data[k]=g(k) }
+    if(g('occupancy')){ const o=g('occupancy').toLowerCase(); data.occupancy = /absentee|non.?owner|no$|^n$|false/.test(o) ? 'Absentee' : /owner|yes|^y$|true/.test(o) ? 'Owner occupied' : g('occupancy') }
+    const owner2 = g('owner2') || [g('owner2_first'), g('owner2_last')].filter(Boolean).join(' ')
+    if(owner2 && owner2.toLowerCase()!==owner.toLowerCase()) data.co_owner = owner2
     if(data.value && data.equity!==undefined && data.loan===undefined) data.loan = Math.max(0, data.value - data.equity)
     const rec = { addr_key:key, address:street.replace(/\s+/g,' ').trim(), city, state:normState(st),
       zip:(zip.match(/\d{5}/)||[''])[0], county:g('county'), owner_name:owner, mailing, phones, emails, data }
@@ -309,7 +319,11 @@ export async function sendToLeads(props, {leads, campaign, onProgress=()=>{}}){
         freshness:100, times_contacted:0, motivation:Math.min(95, 35+stack*15), skiptraced:(p.phones||[]).length>0,
         details:{ ...BLANK_DETAILS, repairs:{}, beds:d.beds||'', baths:d.baths||'', sqft:d.sqft||'', year_built:d.year_built||'',
           campaign:campaign||p.campaign||'', lists:p.list_types||[], stack, property_id:String(p.id),
-          phones:p.phones||[], emails:p.emails||[], mailing:p.mailing||'', zip:p.zip||'', county:p.county||'' },
+          phones:p.phones||[], emails:p.emails||[], mailing:p.mailing||'', zip:p.zip||'', county:p.county||'',
+          ...(d.occupancy==='Owner occupied'?{occupancy:'Owner occupied'}:{}),
+          ...(d.record_date?{record_date:d.record_date}:{}), ...(d.case_number?{case_number:d.case_number}:{}),
+          ...(d.owner_type?{owner_type:d.owner_type}:{}), ...(d.occupancy==='Absentee'?{absentee:true}:{}),
+          ...(d.co_owner?{people:[{ name:d.co_owner, role:'Co-owner', phone:'', decides:false, note:'From list' }]}:{}) },
       }
     })
     const { data, error } = await supabase.from('leads').insert(rows).select('id')

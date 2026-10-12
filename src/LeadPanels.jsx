@@ -180,6 +180,14 @@ export function CallCard({lead,onEdit,onAnalyze}){
           {dm ? <div><b style={{color:C.green}}>Decision maker:</b> <span style={{color:C.cream}}>{dm.name} ({dm.role.toLowerCase()}){dm.phone?' · '+dm.phone:''}</span></div> : <div><b style={{color:C.green}}>Decision maker:</b> <span style={{color:C.cream}}>{lead.name} (owner on record)</span></div>}
           {ppl.filter(p=>p!==dm).length>0 && <div style={{color:C.muted}}>Also involved: {ppl.filter(p=>p!==dm).map(p=>p.name+' ('+p.role.toLowerCase()+')').join(', ')}</div>}
         </div> })()}
+      {(()=>{ const d0 = lead.details||{}; if(!d0.record_date && !d0.case_number && !d0.owner_type && !d0.absentee) return null
+        const ot = /^individual$/i.test(String(d0.owner_type||'').trim()) ? '' : String(d0.owner_type||''), flag = /gov|hoa|lien/i.test(ot) ? 'The name on file may be a lender or HOA, not the owner — look up the real owner before calling.'
+          : /deceased|estate|probate|personal rep/i.test(ot) ? 'Estate / probate — ask for the executor or heirs, and add them under People on this deal.'
+          : /llc|company|corp|inc|trust/i.test(ot) ? 'Owned by a company or trust — ask for the decision maker.' : ''
+        return <div style={{background:C.ink,borderRadius:10,padding:'9px 12px',marginBottom:12,fontSize:12.5,lineHeight:1.5}}>
+          <div style={{color:C.cream}}>{[d0.record_date&&<span key="r"><b style={{color:C.amber}}>Filed</b> {d0.record_date}</span>, d0.case_number&&<span key="c">Case/Instr # {d0.case_number}</span>, ot&&<span key="o">{ot}</span>, d0.absentee&&<span key="a" style={{color:C.blue}}>Absentee owner</span>].filter(Boolean).reduce((a,x,i)=>i?[...a,' · ',x]:[x],[])}</div>
+          {flag && <div style={{color:C.amber,marginTop:2}}>{flag}</div>}
+        </div> })()}
       {(lead.details&&(lead.details.lists||[]).length>0) &&
       <div style={{background:C.ink,borderRadius:10,padding:'9px 12px',marginBottom:12,fontSize:12.5,lineHeight:1.5}}>
         <b style={{color:lead.details.lists.length>=3?C.orange:C.amber}}>On {lead.details.lists.length} list{lead.details.lists.length===1?'':'s'}:</b> <span style={{color:C.cream}}>{lead.details.lists.join(' · ')}</span>
