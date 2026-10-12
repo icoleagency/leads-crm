@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient'
+import { fetchAllRows } from './fetchAll'
 import { money, compResult, detailsOf, REPAIRS } from './leadModel'
 import { normPhone, fmtPhone } from './stacking'
 
@@ -64,7 +65,7 @@ export async function importBuyers(rows, existing, onProgress=()=>{}){
 // ---------- activity ----------
 export async function fetchBuyerActivity(){
   const since = new Date(); since.setDate(since.getDate()-365)
-  return run(supabase.from('buyer_activity').select('*').gte('created_at', since.toISOString()).order('created_at',{ascending:false}).limit(5000))
+  return fetchAllRows(()=>supabase.from('buyer_activity').select('*').gte('created_at', since.toISOString()).order('created_at',{ascending:false}).order('id',{ascending:false}))
 }
 export function logBuyer(buyerId, leadId, kind, {amount, note}={}){
   return run(supabase.from('buyer_activity').insert([{ buyer_id:buyerId, lead_id:String(leadId), kind, amount:Number(amount)||null, note:(note||'').trim()||null }]))

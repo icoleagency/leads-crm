@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient'
+import { OUTCOME } from './activity'
 
 // Shared lead shape + helpers used by Leads, Call Card, Script, and the Deal Analyzer.
 
@@ -140,4 +141,24 @@ export function researchLinks(lead){
   if(/lis pendens|foreclos/i.test(type)) links.push(['Sheriff sale', g((county || city+' '+st)+' sheriff sale '+street)])
   if(/probate|inherit/i.test(type)) links.push(['Obituary', g('"'+(lead.name||'')+'" obituary '+city)])
   return links
+}
+
+// ---------- automatic lead signals ----------
+// Freshness fades with age (100 on day one, "stale" after ~7 weeks); times called comes from the call log.
+export function autoFreshness(l){
+  if(!l.created_at) return l.freshness ?? 100
+  const d = daysSince(l.created_at)
+  return Math.max(5, Math.round(100 - d*1.4))
+}
+export function enrichLeads(leads, activity){
+  const dials = {}, last = {}
+  for(const a of activity||[]){
+    const o = OUTCOME[a.outcome]; if(!o || !o.dial) continue
+    dials[a.lead_id] = (dials[a.lead_id]||0) + 1
+    if(!last[a.lead_id]) last[a.lead_id] = a.created_at
+  }
+  return (leads||[]).map(l=>{
+    const id = String(l.id), n = dials[id]||0
+    return { ...l, freshness:autoFreshness(l), times_contacted:Math.max(Number(l.times_contacted)||0, n), _dials:n, _lastCall:last[id]||null }
+  })
 }

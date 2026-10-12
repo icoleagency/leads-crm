@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { fetchAllRows } from './fetchAll'
 import { supabase } from './supabaseClient'
 import AcademyPage from './AcademyPage'
 import TodayPage from './TodayPage'
 import DispoPage from './DispoPage'
 import KpiPage from './KpiPage'
-import { REPAIRS, BLANK_DETAILS, detailsOf, money, callbackOf, callbackState, eqOf, scoreOf, stageOf, STAGE } from './leadModel'
+import { enrichLeads, REPAIRS, BLANK_DETAILS, detailsOf, money, callbackOf, callbackState, eqOf, scoreOf, stageOf, STAGE } from './leadModel'
 import Pipeline from './Pipeline'
 import { CallCard, ScriptPanel, LogCall, HandoffPanel, PeoplePanel } from './LeadPanels'
 import VaWorkspace from './VaWorkspace'
@@ -66,10 +67,11 @@ export default function App(){
   const [meId,setMeId] = useState(getMe())
   const onMe = id => { setMe(id); setMeId(id) }
   const [menuOpen,setMenuOpen] = useState(false)
-  const [leads,setLeads] = useState([])
+  const [rawLeads,setLeads] = useState([])
   const [loading,setLoading] = useState(true)
   const [err,setErr] = useState('')
   const [activity,setActivity] = useState([])
+  const leads = useMemo(()=>enrichLeads(rawLeads, activity),[rawLeads, activity])
   const [actErr,setActErr] = useState('')
   const [analyzeId,setAnalyzeId] = useState('')
   const [focusId,setFocusId] = useState('')
@@ -88,9 +90,8 @@ export default function App(){
   async function load(silent){
     if(silent!==true) setLoading(true)
     try{
-      const { data, error } = await supabase.from('leads').select('*')
-      if(error) throw error
-      setLeads(data||[]); setErr('')
+      const data = await fetchAllRows(()=>supabase.from('leads').select('*').order('id'))
+      setLeads(data); setErr('')
     }catch(e){ setErr(friendlyErr(e.message)) }
     setLoading(false)
   }
@@ -181,12 +182,16 @@ function LeadsPage({leads,campaigns=[],loading,reload,reloadQuiet,loadErr,activi
   const [showAdd,setShowAdd] = useState(false)
   const [form,setForm] = useState(BLANK)
   const [filter,setFilter] = useState('All')
+  const [q,setQ] = useState('')
+  const [limit,setLimit] = useState(150)
   const [formErr,setFormErr] = useState('')
   const [saving,setSaving] = useState(false)
   const [editId,setEditId] = useState(null)
 
   const ranked = [...leads].sort((a,b)=>scoreOf(b)-scoreOf(a))
-  const shown = ranked.filter(l=> (filter==='All' || l.state===filter) && (!campFilter || (campFilter==='none' ? !campaignOf(l) : campaignOf(l)===campFilter)))
+  const qs = q.trim().toLowerCase(), qd = qs.replace(/\D/g,'')
+  const hit = l => !qs || [l.name,l.address,l.city,l.lead_type,(l.details&&l.details.zip)].some(v=>String(v||'').toLowerCase().includes(qs)) || (qd.length>=4 && String(l.phone||'').replace(/\D/g,'').includes(qd))
+  const shown = ranked.filter(l=> (filter==='All' || l.state===filter) && (!campFilter || (campFilter==='none' ? !campaignOf(l) : campaignOf(l)===campFilter)) && hit(l))
   const sel = leads.find(l=>l.id===selId) || shown[0] || null
   const set = (k,v)=> setForm({...form,[k]:v})
   const setD = (k,v)=> setForm({...form, details:{...form.details,[k]:v}})
@@ -263,9 +268,9 @@ function LeadsPage({leads,campaigns=[],loading,reload,reloadQuiet,loadErr,activi
           <In ph="Owed" v={form.owed} on={v=>set('owed',v)} type="number"/>
         </div>
         <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'repeat(3,1fr)',gap:14,marginTop:14}}>
-          <Slider label={'Freshness: '+form.freshness} v={form.freshness} mn={0} mx={100} on={v=>set('freshness',v)}/>
           <Slider label={'Motivation: '+form.motivation} v={form.motivation} mn={0} mx={100} on={v=>set('motivation',v)}/>
-          <Slider label={'Times called before: '+form.times_contacted} v={form.times_contacted} mn={0} mx={6} on={v=>set('times_contacted',v)}/>
+          <Slider label={'Times called before this CRM: '+form.times_contacted} v={form.times_contacted} mn={0} mx={6} on={v=>set('times_contacted',v)}/>
+          <div style={{color:C.muted,fontSize:11.5,lineHeight:1.45,alignSelf:'center'}}>Freshness and times called update on their own from the date added and every logged call.</div>
         </div>
         <label style={{display:'flex',gap:8,alignItems:'center',marginTop:14,fontSize:13,color:C.muted}}>
           <input type="checkbox" checked={form.skiptraced} onChange={e=>set('skiptraced',e.target.checked)}/> Skip-trace confirmed
@@ -303,6 +308,7 @@ function LeadsPage({leads,campaigns=[],loading,reload,reloadQuiet,loadErr,activi
       </div>}
 
       <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap'}}>
+        <input value={q} onChange={e=>{ setQ(e.target.value); setLimit(150) }} placeholder="Search name, address, city, phone…" style={{background:C.ink,border:'1px solid '+(q?C.orange:C.line),borderRadius:20,padding:'6px 14px',color:C.cream,fontSize:13,outline:'none',flex:isMobile?'1 1 100%':'0 1 260px',minWidth:0}}/>
         {['All','NJ','FL','DE','PA'].map(s=>(
           <button key={s} onClick={()=>setFilter(s)} style={{border:'1px solid '+(filter===s?C.orange:C.line),background:filter===s?C.orange:'transparent',color:filter===s?C.ink:C.muted,borderRadius:20,padding:'6px 14px',fontWeight:600,cursor:'pointer',fontSize:13}}>{s}</button>
         ))}
@@ -316,12 +322,12 @@ function LeadsPage({leads,campaigns=[],loading,reload,reloadQuiet,loadErr,activi
 
       {loading ? <p style={{color:C.muted}}>Loading...</p> :
        loadErr && shown.length===0 ? <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:14,padding:30,color:C.muted}}>Couldn't load your leads — see the message above, then hit Retry.</div> :
-       shown.length===0 ? <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:14,padding:30,color:C.muted}}>No leads yet - tap "+ Add Lead" to start.</div> :
+       shown.length===0 ? <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:14,padding:30,color:C.muted}}>{leads.length ? 'No leads match your search or filters.' : 'No leads yet - tap "+ Add Lead" to start.'}</div> :
       <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'280px 1fr',gap:16,alignItems:'start'}}>
         <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:14}}>
-          <div style={{color:C.muted,fontSize:11,textTransform:'uppercase',letterSpacing:1,padding:'4px 6px 10px'}}>Work Queue - best first</div>
+          <div style={{color:C.muted,fontSize:11,textTransform:'uppercase',letterSpacing:1,padding:'4px 6px 10px'}}>Work Queue - best first · {shown.length.toLocaleString()}</div>
           <div style={{display:isMobile?'grid':'block',gridTemplateColumns:isMobile?'1fr 1fr':'none',gap:isMobile?8:0}}>
-            {shown.map(l=>{
+            {shown.slice(0,limit).map(l=>{
               const s=scoreOf(l); const g=grade(s); const active=sel && l.id===sel.id
               return (
                 <div key={l.id} onClick={()=>{ setSelId(l.id); if(isMobile){ window.scrollTo({top:0,behavior:'smooth'}) } }} style={{background:active?C.panel2:'transparent',border:'1px solid '+(active?C.orange:'transparent'),borderRadius:12,padding:13,marginBottom:isMobile?0:7,cursor:'pointer'}}>
@@ -343,6 +349,7 @@ function LeadsPage({leads,campaigns=[],loading,reload,reloadQuiet,loadErr,activi
               )
             })}
           </div>
+          {shown.length>limit && <button onClick={()=>setLimit(limit+300)} style={{width:'100%',marginTop:8,background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'8px',fontSize:12,cursor:'pointer'}}>Show more ({(shown.length-limit).toLocaleString()} left)</button>}
         </div>
         {sel && <LeadDetail key={sel.id} lead={sel} onDelete={()=>remove(sel.id)} onEdit={()=>openEdit(sel)} activity={activity} reloadActivity={reloadActivity} reloadLeads={reloadQuiet} onAnalyze={()=>onAnalyze(sel.id)} isMobile={isMobile}/>}
       </div>}

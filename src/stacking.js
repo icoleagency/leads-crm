@@ -1,5 +1,6 @@
 import Papa from 'papaparse'
 import { supabase } from './supabaseClient'
+import { fetchAllRows } from './fetchAll'
 import { BLANK_DETAILS, patchLead } from './leadModel'
 
 // ---------- list types (order = priority when a property becomes a lead) ----------
@@ -277,8 +278,7 @@ export async function removeList(id){
 
 // After a list is removed, bring each linked lead's "On N lists" back in line.
 export async function syncLeadStacks(leads){
-  const { data, error } = await supabase.from('properties').select('id,lead_id,list_types').not('lead_id','is',null).limit(5000)
-  if(error) throw error
+  const data = await fetchAllRows(()=>supabase.from('properties').select('id,lead_id,list_types').not('lead_id','is',null).order('id'))
   const byId = new Map((leads||[]).map(l=>[String(l.id), l]))
   const stale = (data||[]).filter(p=>{ const l=byId.get(String(p.lead_id)); return l && JSON.stringify((l.details||{}).lists||[])!==JSON.stringify(p.list_types) })
   for(const part of chunks(stale, 10))

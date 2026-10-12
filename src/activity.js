@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient'
+import { fetchAllRows } from './fetchAll'
 
 // One logged call = one row in lead_activity.
 // key, button label, short label, counts as a dial?, reached a human?
@@ -44,9 +45,7 @@ export function saveCaller(v){ try{ localStorage.setItem('wos_caller',v) }catch{
 
 export async function fetchActivity(days=90){
   const since = new Date(startOfDay().getTime() - (days-1)*DAY).toISOString()
-  const { data, error } = await supabase.from('lead_activity').select('*').gte('created_at',since).order('created_at',{ascending:false})
-  if(error) throw error
-  return data||[]
+  return fetchAllRows(()=>supabase.from('lead_activity').select('*').gte('created_at',since).order('created_at',{ascending:false}).order('id',{ascending:false}))
 }
 
 export async function logActivity(lead, outcome, {amount, note, caller}={}){
