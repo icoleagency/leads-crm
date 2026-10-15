@@ -6,7 +6,8 @@ import { tally, inLastDays, pct, saveCaller, dailySeries, OUTCOME } from './acti
 import DailyBars from './DailyBars'
 import { buildQueue, whenText, MAX_TRIES } from './callQueue'
 import { saveCampaign, deleteCampaign, saveMember, deleteMember, campaignOf, campaignName } from './team'
-import { CallCard, ScriptPanel, LogCall, HandoffPanel, IntelEditor, PeoplePanel } from './LeadPanels'
+import { CallCard, ScriptPanel, LogCall, HandoffPanel, IntelEditor, PeoplePanel, PhonesPanel } from './LeadPanels'
+import { skipTraceCsv } from './stacking'
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -72,7 +73,7 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
 
   // ---- my queue (smart call list) ----
   const myCamps = me ? (me.campaigns||[]).map(String) : []
-  const Q = me ? buildQueue(leads, activity, myCamps) : { due:[], scheduled:[], doneToday:[], parked:[] }
+  const Q = me ? buildQueue(leads, activity, myCamps) : { due:[], scheduled:[], doneToday:[], parked:[], noPhone:[] }
   const tabList = Q[qTab] || Q.due
   const dueCount = Q.due.filter(x=>x.kind==='callback').length, overdueCount = Q.due.filter(x=>x.cs==='overdue').length
   const shown = showAll ? tabList : tabList.slice(0,25)
@@ -148,20 +149,24 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
               </div>
             </div>
             <div style={{display:'flex',gap:6,flexWrap:'wrap',margin:'4px 0 8px'}}>
-              {[['due','Call now',Q.due.length,C.orange],['scheduled','Later',Q.scheduled.length,C.blue],['doneToday','Done today',Q.doneToday.length,C.green],['parked','No contact',Q.parked.length,C.muted]].map(([k,l,n,c])=>(
+              {[['due','Call now',Q.due.length,C.orange],['scheduled','Later',Q.scheduled.length,C.blue],['doneToday','Done today',Q.doneToday.length,C.green],['parked','No contact',Q.parked.length,C.muted],['noPhone','Need numbers',Q.noPhone.length,C.amber]].map(([k,l,n,c])=>(
                 <button key={k} onClick={()=>{ setQTab(k); setShowAll(false) }} style={{background:qTab===k?c:'transparent',color:qTab===k?C.ink:C.muted,border:'1px solid '+(qTab===k?c:C.line),borderRadius:14,padding:'4px 11px',fontSize:12,fontWeight:700,cursor:'pointer'}}>{l} · {n}</button>
               ))}
             </div>
             <div style={{color:C.muted,fontSize:11.5,marginBottom:10,lineHeight:1.45}}>{qTab==='due' ? 'Callbacks first, then sellers you\'ve talked to, then new leads and retries by score. No-answers come back on day 1, 2, 4, 7 and 14; after '+MAX_TRIES+' tries with no contact they move to "No contact".'
-              : qTab==='scheduled' ? 'Not due yet — each one comes back on its own on the day shown.' : qTab==='doneToday' ? 'Already called today. They come back on their next scheduled day.' : 'Called '+MAX_TRIES+'+ times with no answer. Bring one back to start its tries over, or re-skip-trace for new numbers.'}</div>
+              : qTab==='scheduled' ? 'Not due yet — each one comes back on its own on the day shown.' : qTab==='doneToday' ? 'Already called today. They come back on their next scheduled day.' : qTab==='parked' ? 'Called '+MAX_TRIES+'+ times with no answer. Bring one back to start its tries over, or re-skip-trace for new numbers.' : 'No working phone number — every number is missing, wrong, disconnected or DNC. Export them for skip tracing, then upload the results in List Stacking ("Skip-trace results — add phones only").'}</div>
             {qTab==='due' && dueCount>0 && <div style={{background:(overdueCount?C.red:C.amber)+'14',border:'1px solid '+(overdueCount?C.red:C.amber)+'55',borderRadius:10,padding:'9px 12px',marginBottom:10,fontSize:12.5,color:C.cream}}><b style={{color:overdueCount?C.red:C.amber}}>{dueCount} callback{dueCount===1?'':'s'} due today</b>{overdueCount?' · '+overdueCount+' overdue':''} — they're at the top of your list.</div>}
             {tabList.length===0 ? <div style={{color:C.muted,fontSize:13,padding:'8px 0'}}>{!myCamps.length ? 'Ask your manager to assign you to a county.' : qTab==='due' ? (Q.scheduled.length||Q.doneToday.length ? 'You\'re caught up — everything else is scheduled for later. Nice work.' : 'Nothing to call in your counties right now. Ask for a new list, or check that leads have a campaign set.') : 'Nothing here.'}</div> :
             <div>
+              {qTab==='noPhone' && <button onClick={()=>{
+                const props = Q.noPhone.map(({l})=>({ owner_name:l.name, address:l.address, city:l.city, state:l.state, zip:(l.details||{}).zip||'', mailing:(l.details||{}).mailing||'' }))
+                const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([skipTraceCsv(props)],{type:'text/csv'})); a.download='need-numbers-'+new Date().toISOString().slice(0,10)+'.csv'; document.body.appendChild(a); a.click(); a.remove()
+              }} style={{width:'100%',background:'transparent',color:C.amber,border:'1px solid '+C.amber,borderRadius:10,padding:'9px',fontWeight:800,fontSize:12.5,cursor:'pointer',marginBottom:8}}>Export {Q.noPhone.length} for skip trace</button>}
               {qTab==='due' && <button onClick={()=>{ setWork({ ids:Q.due.map(x=>x.l.id), i:0 }); window.scrollTo({top:0}) }} style={{width:'100%',background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'11px',fontWeight:800,fontSize:13,cursor:'pointer',marginBottom:8}}>Start working my list →</button>}
               {shown.map(x=>{
                 const { l, kind, label, tries, last, cb, cs, score } = x
                 const sc = score>=70?C.red:score>=50?C.orange:score>=30?C.amber:C.muted
-                const tagC = kind==='callback' ? (cs==='overdue'?C.red:cs==='today'?C.amber:C.blue) : kind==='followup' ? C.green : kind==='new' ? C.blue : kind==='parked' ? C.muted : C.amber
+                const tagC = kind==='callback' ? (cs==='overdue'?C.red:cs==='today'?C.amber:C.blue) : kind==='followup' ? C.green : kind==='new' ? C.blue : kind==='parked' ? C.muted : kind==='nophone' ? C.red : C.amber
                 return (
                   <div key={l.id} onClick={()=>{ setWork({ ids:tabList.map(y=>y.l.id), i:tabList.findIndex(y=>y.l.id===l.id) }); window.scrollTo({top:0}) }} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 6px',borderBottom:'1px solid '+C.line,cursor:'pointer'}}>
                     <span title={'Score '+score} style={{minWidth:30,height:26,borderRadius:7,background:sc+'22',color:sc,border:'1px solid '+sc,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:800,fontSize:12,flexShrink:0}}>{score}</span>
@@ -314,7 +319,6 @@ function LeadWork({lead,idx,total,onBack,onPrev,onNext,activity,reloadActivity,r
 
   const g = gradeLetter(scoreOf(lead)), st = stageOf(lead, activity)
   const camp = campaignName(campaigns, campaignOf(lead))
-  const phone = (lead.phone||'').trim()
   return (
     <div>
       {bar}
@@ -329,9 +333,7 @@ function LeadWork({lead,idx,total,onBack,onPrev,onNext,activity,reloadActivity,r
               </div>
               <span style={{width:40,height:40,borderRadius:10,background:GRADE_C[g]+'22',color:GRADE_C[g],border:'1px solid '+GRADE_C[g],display:'flex',alignItems:'center',justifyContent:'center',fontWeight:800,fontSize:18,flexShrink:0,fontFamily:'Georgia,serif'}}>{g}</span>
             </div>
-            {phone ?
-              <a href={'tel:'+phone.replace(/[^\d+]/g,'')} style={{display:'block',textAlign:'center',marginTop:14,background:C.green,color:C.ink,borderRadius:10,padding:'12px',fontWeight:800,fontSize:15,textDecoration:'none'}}>Call {phone}</a> :
-              <div style={{marginTop:14,color:C.amber,fontSize:12.5,background:C.amber+'14',border:'1px solid '+C.amber+'44',borderRadius:8,padding:'9px 11px'}}>No phone number on this lead — it needs skip tracing.</div>}
+            <div style={{marginTop:14}}><PhonesPanel lead={lead} reloadLeads={reloadLeads} big/></div>
           </div>
           {editing
             ? <IntelEditor lead={lead} onDone={()=>setEditing(false)} reloadLeads={reloadLeads}/>

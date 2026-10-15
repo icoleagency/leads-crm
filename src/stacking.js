@@ -297,7 +297,8 @@ export async function appendContacts(records, leads, onProgress=()=>{}){
   for(const r of records){
     const e = existing.get(r.addr_key); if(!e) continue
     matched++
-    const phones = uniq([...(e.phones||[]), ...(r.phones||[])]), emails = uniq([...(e.emails||[]), ...(r.emails||[])])
+    const badSet = new Set((e.data && e.data.bad_phones) || [])
+    const phones = uniq([...(e.phones||[]), ...(r.phones||[]).filter(n=>!badSet.has(n))]), emails = uniq([...(e.emails||[]), ...(r.emails||[])])
     phonesAdded += phones.length-(e.phones||[]).length
     if(phones.length===(e.phones||[]).length && emails.length===(e.emails||[]).length && (e.owner_name || !r.owner_name)) continue
     rows.push({ addr_key:e.addr_key, address:e.address, phones, emails, owner_name:e.owner_name||r.owner_name||null, mailing:e.mailing||r.mailing||null, updated_at:new Date().toISOString(), _lead:e.lead_id })

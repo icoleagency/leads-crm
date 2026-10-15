@@ -1,4 +1,4 @@
-import { fmtPhone } from './stacking'
+import { leadPhones, BAD, PHONE_STATUS, markPhone, setLeadDnc, fmtPhone } from './phones'
 import { useState } from 'react'
 import { PILLARS, researchLinks, REPAIRS, detailsOf, money, compResult, stageOf, stageIdx, STAGE, OUTCOME_STAGE, moveStage, patchLead, callbackOf, callbackState, fmtWhen } from './leadModel'
 import { OUTCOMES, OUTCOME, logActivity, activityErr, getCaller, saveCaller } from './activity'
@@ -192,7 +192,6 @@ export function CallCard({lead,onEdit,onAnalyze}){
       <div style={{background:C.ink,borderRadius:10,padding:'9px 12px',marginBottom:12,fontSize:12.5,lineHeight:1.5}}>
         <b style={{color:lead.details.lists.length>=3?C.orange:C.amber}}>On {lead.details.lists.length} list{lead.details.lists.length===1?'':'s'}:</b> <span style={{color:C.cream}}>{lead.details.lists.join(' · ')}</span>
         {lead.details.lists.length>=2 && <div style={{color:C.muted,marginTop:2}}>Multiple distress signals — ask about each one ("I saw the taxes are behind — is that part of why you'd sell?").</div>}
-        {(lead.details.phones||[]).length>1 && <div style={{color:C.muted,marginTop:2}}>Other numbers: {lead.details.phones.slice(1).map(fmtPhone).join(', ')}</div>}
       </div>}
       {cr &&
       <div style={{background:C.ink,borderRadius:10,padding:'11px 14px',marginBottom:12,display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
@@ -566,6 +565,63 @@ export function IntelEditor({lead,onDone,reloadLeads}){
         <button onClick={save} disabled={busy} style={{background:C.orange,color:C.ink,border:'none',borderRadius:8,padding:'9px 18px',fontWeight:800,fontSize:12.5,cursor:'pointer',opacity:busy?0.7:1}}>{busy?'Saving...':'Save intel'}</button>
         <button onClick={onDone} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'9px 14px',fontSize:12.5,cursor:'pointer'}}>Cancel</button>
       </div>
+    </div>
+  )
+}
+
+// ---- every phone number on the lead, with Wrong / Disconnected / DNC marking ----
+export function PhonesPanel({lead,reloadLeads,big}){
+  const phones = leadPhones(lead)
+  const good = phones.filter(p=>!BAD.includes(p.status)), bad = phones.filter(p=>BAD.includes(p.status))
+  const d = lead.details || {}
+  const [busy,setBusy] = useState('')
+  const [err,setErr] = useState('')
+  const [copied,setCopied] = useState('')
+  const who = getCaller() || 'VA'
+  async function act(key, fn){
+    setBusy(key); setErr('')
+    try{ await fn(); if(reloadLeads) await reloadLeads() }catch(e){ setErr(/fetch/i.test(e.message)?"Can't reach the database — try again in a minute.":e.message) }
+    setBusy('')
+  }
+  async function copy(n){ try{ await navigator.clipboard.writeText(n); setCopied(n); setTimeout(()=>setCopied(''),1500) }catch{ /* blocked */ } }
+  const small = (label, col, onClick, k) => <button key={label} disabled={!!busy} onClick={onClick} style={{background:'transparent',border:'1px solid '+col+'66',color:col,borderRadius:7,padding:'3px 8px',fontSize:11,fontWeight:700,cursor:busy?'default':'pointer',opacity:busy===k?0.5:1,whiteSpace:'nowrap'}}>{label}</button>
+  if(d.dnc) return (
+    <div style={{background:C.red+'14',border:'1px solid '+C.red+'66',borderRadius:12,padding:'12px 14px'}}>
+      <div style={{color:C.red,fontWeight:800,fontSize:13.5}}>Do not call — the owner asked to be removed</div>
+      <div style={{color:C.muted,fontSize:12,marginTop:2}}>{d.dnc_by?'Marked by '+d.dnc_by:''}{d.dnc_at?' · '+new Date(d.dnc_at).toLocaleDateString():''} · This lead is off every call list.</div>
+      <button disabled={!!busy} onClick={()=>act('undnc',()=>setLeadDnc(lead,false))} style={{marginTop:8,background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:7,padding:'4px 10px',fontSize:11.5,cursor:'pointer'}}>Undo — they can be called</button>
+    </div>
+  )
+  return (
+    <div>
+      {good.length===0 ?
+        <div style={{color:C.amber,fontSize:12.5,background:C.amber+'14',border:'1px solid '+C.amber+'44',borderRadius:10,padding:'9px 11px',lineHeight:1.45}}>{phones.length ? 'No working numbers left' : 'No phone number on this lead'} — it moves to <b>Need numbers</b> on the call list. Skip trace it for new numbers.</div>
+      : good.map((p,i)=>(
+        <div key={p.n} style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',padding:'5px 0',borderTop:i?'1px solid '+C.line:'none'}}>
+          <a href={'tel:'+p.n} style={{flex:big&&i===0?'1 1 100%':'0 0 auto',textAlign:'center',background:i===0?C.green:'transparent',color:i===0?C.ink:C.green,border:'1px solid '+C.green,borderRadius:10,padding:big&&i===0?'11px 14px':'6px 12px',fontWeight:800,fontSize:big&&i===0?15:13,textDecoration:'none',whiteSpace:'nowrap'}}>Call {fmtPhone(p.n)}</a>
+          {p.status==='good' && <span style={{color:C.green,fontSize:11,fontWeight:700}}>✓ good number</span>}
+          <span style={{display:'flex',gap:4,flexWrap:'wrap',marginLeft:big&&i===0?0:'auto'}}>
+            {p.status!=='good' && small('✓ Good',C.green,()=>act(p.n+'g',()=>markPhone(lead,p.n,'good',who)),p.n+'g')}
+            {small('Wrong #',C.red,()=>act(p.n+'w',()=>markPhone(lead,p.n,'wrong',who)),p.n+'w')}
+            {small('Disconnected',C.muted,()=>act(p.n+'d',()=>markPhone(lead,p.n,'disconnected',who)),p.n+'d')}
+            {small('DNC',C.red,()=>act(p.n+'x',()=>markPhone(lead,p.n,'dnc',who)),p.n+'x')}
+            {small(copied===p.n?'Copied':'Copy',C.muted,()=>copy(p.n),p.n+'c')}
+          </span>
+        </div>
+      ))}
+      {bad.length>0 && <div style={{marginTop:8}}>
+        {bad.map(p=>(
+          <div key={p.n} style={{display:'flex',alignItems:'center',gap:8,fontSize:12,padding:'2px 0'}}>
+            <span style={{color:C.muted,textDecoration:'line-through'}}>{fmtPhone(p.n)}</span>
+            <span style={{color:PHONE_STATUS[p.status][1],fontWeight:700,fontSize:11}}>{PHONE_STATUS[p.status][0]}</span>
+            <span style={{color:C.muted,fontSize:11}}>{p.by?'· '+p.by:''}</span>
+            <span onClick={()=>!busy && act(p.n+'u',()=>markPhone(lead,p.n,null,who))} style={{color:C.muted,fontSize:11,cursor:'pointer',marginLeft:'auto',textDecoration:'underline'}}>Undo</span>
+          </div>))}
+      </div>}
+      <div style={{marginTop:8,textAlign:'right'}}>
+        <span onClick={()=>{ if(!busy && confirm('The owner asked not to be called? This removes the lead from every call list.')) act('dnc',()=>setLeadDnc(lead,true,who)) }} style={{color:C.red,fontSize:11.5,cursor:'pointer'}}>Owner asked not to be called</span>
+      </div>
+      {err && <div style={{color:C.red,fontSize:12,marginTop:6}}>{err}</div>}
     </div>
   )
 }

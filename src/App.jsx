@@ -7,7 +7,8 @@ import DispoPage from './DispoPage'
 import KpiPage from './KpiPage'
 import { enrichLeads, REPAIRS, BLANK_DETAILS, detailsOf, money, callbackOf, callbackState, eqOf, scoreOf, stageOf, STAGE } from './leadModel'
 import Pipeline from './Pipeline'
-import { CallCard, ScriptPanel, LogCall, HandoffPanel, PeoplePanel } from './LeadPanels'
+import { CallCard, ScriptPanel, LogCall, HandoffPanel, PeoplePanel, PhonesPanel } from './LeadPanels'
+import { goodPhones, isDnc } from './phones'
 import VaWorkspace from './VaWorkspace'
 import ListStacking from './ListStacking'
 import { TYPE_NAMES } from './stacking'
@@ -343,7 +344,7 @@ function LeadsPage({leads,campaigns=[],loading,reload,reloadQuiet,loadErr,activi
                     {campaignOf(l) && campaignName(campaigns,campaignOf(l)) && <Tag c={C.muted}>{campaignName(campaigns,campaignOf(l))}</Tag>}
                     <Tag c={C.blue}>{freshLabel(l.freshness)}</Tag>
                     {l.times_contacted===0? <Tag c={C.green}>Never called</Tag> : <Tag c={l.times_contacted<=1?C.amber:C.red}>{l.times_contacted}x called</Tag>}
-                    {l.skiptraced && <Tag c={C.green}>traced</Tag>}
+                    {isDnc(l) ? <Tag c={C.red}>Do not call</Tag> : !goodPhones(l).length ? <Tag c={C.amber}>Needs numbers</Tag> : l.skiptraced && <Tag c={C.green}>traced</Tag>}
                   </div>
                 </div>
               )
@@ -368,7 +369,7 @@ function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,reloadLeads,on
             <div style={{minWidth:0}}>
               <div style={{fontSize:22,fontFamily:'Georgia,serif',fontWeight:600}}>{lead.name}</div>
               <div style={{color:C.muted,fontSize:13,marginTop:3}}>{lead.address}{lead.address?', ':''}{lead.city} {lead.state}</div>
-              <div style={{color:C.muted,fontSize:13}}>{lead.lead_type} - {lead.phone||'no phone'}</div>
+              <div style={{color:C.muted,fontSize:13}}>{lead.lead_type} · {isDnc(lead) ? <span style={{color:C.red}}>do not call</span> : (n=>n ? n+' working number'+(n===1?'':'s') : <span style={{color:C.amber}}>no working number</span>)(goodPhones(lead).length)}</div>
             </div>
             <div style={{textAlign:'center',flexShrink:0}}>
               <div style={{width:88,height:88,borderRadius:'50%',background:'conic-gradient('+g.c+' '+(s*3.6)+'deg, '+C.ink+' 0deg)',display:'flex',alignItems:'center',justifyContent:'center'}}>
@@ -382,6 +383,10 @@ function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,reloadLeads,on
           </div>
         </div>
 
+        <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:18}}>
+          <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:1,marginBottom:10}}>Phone numbers</div>
+          <PhonesPanel lead={lead} reloadLeads={reloadLeads}/>
+        </div>
         <CallCard lead={lead} onEdit={onEdit} onAnalyze={onAnalyze}/>
         <PeoplePanel lead={lead} reloadLeads={reloadLeads}/>
 

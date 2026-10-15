@@ -1,6 +1,7 @@
 import { OUTCOME } from './activity'
 import { stageOf, scoreOf, callbackOf, callbackState } from './leadModel'
 import { campaignOf, openHandoff } from './team'
+import { goodPhones, leadPhones } from './phones'
 
 // ---- the rules (change here to change everyone's call list) ----
 export const RETRY_GAPS = [1, 1, 2, 3, 7]   // days between no-answer tries → tries on day 0, 1, 2, 4, 7, 14
@@ -19,7 +20,7 @@ export function buildQueue(leads, activity, campaignIds){
   const byLead = {}
   for(const a of activity||[]) (byLead[a.lead_id] ||= []).push(a)      // newest first
   const today0 = startOfToday(), now = Date.now()
-  const out = { due:[], scheduled:[], doneToday:[], parked:[] }
+  const out = { due:[], scheduled:[], doneToday:[], parked:[], noPhone:[] }
   for(const l of leads||[]){
     if(!camps.includes(campaignOf(l))) continue
     const d = l.details || {}
@@ -34,6 +35,7 @@ export function buildQueue(leads, activity, campaignIds){
     const cb = callbackOf(l), cs = callbackState(cb)
     const item = { l, st, tries, last, reached, cb, cs, score:rankScore(l) }
 
+    if(!goodPhones(l).length){ out.noPhone.push({...item, kind:'nophone', label:leadPhones(l).length?'All numbers bad':'No phone number'}); continue }
     if(cs==='overdue' || cs==='today'){ out.due.push({...item, kind:'callback', label:cs==='overdue'?'Callback overdue':'Callback today'}); continue }
     if(cs==='later'){ out.scheduled.push({...item, kind:'callback', next:new Date(cb.at).getTime(), label:'Callback set'}); continue }
     if(lastAt>=today0){ out.doneToday.push({...item, kind:'done'}); continue }
@@ -57,6 +59,7 @@ export function buildQueue(leads, activity, campaignIds){
     || (b.score - a.tries*3) - (a.score - b.tries*3))
   out.scheduled.sort((a,b)=>a.next-b.next)
   out.parked.sort((a,b)=>b.score-a.score)
+  out.noPhone.sort((a,b)=>b.score-a.score)
   return out
 }
 export const whenText = t => { const d = new Date(t), days = Math.round((new Date(d).setHours(0,0,0,0)-startOfToday())/DAY)
