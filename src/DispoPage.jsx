@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { stageOf, STAGE, moveStage, patchLead, money } from './leadModel'
-import { parseCsv } from './stacking'
+import { parseCsv, csvCell } from './stacking'
 import { BUYER_TYPES, PROP_TYPES, REHAB_LEVELS, RESPONSES, KIND, dispoErr, fetchBuyers, saveBuyer, deleteBuyer, importBuyers,
   fetchBuyerActivity, logBuyer, logBlast, dealStatus, buyerRecord, dispoOf, dealOf, dealNumbers, rehabLevel, matchesFor, blastText, phoneOut,
   buyerGrade, GRADE_RANK, VIP_HOURS } from './dispo'
@@ -240,7 +240,7 @@ function Blast({grades,lead,matched,status,reload,reloadLeads,goBuyers,isMobile}
   const flash = t2 => { setMsg(t2); setTimeout(()=>setMsg(null), 3000) }
   function downloadPhones(){
     const rows = [['Name','Company','Phone','Email'], ...phones.map(b=>[b.name,b.company||'',phoneOut(b.phone),b.email||''])]
-    const csv = rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n')
+    const csv = rows.map(r=>r.map(csvCell).join(',')).join('\n')
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download = 'buyers-'+(lead.address||'deal').replace(/\W+/g,'-')+'.csv'
     document.body.appendChild(a); a.click(); a.remove()
   }

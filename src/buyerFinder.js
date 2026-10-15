@@ -1,6 +1,6 @@
 import { supabase } from './supabaseClient'
 import { fetchAllRows } from './fetchAll'
-import { autoMap, buildRecords, normPhone } from './stacking'
+import { autoMap, buildRecords, normPhone, csvCell } from './stacking'
 import { nameKey, buyerRow, PROP_TYPES } from './dispo'
 
 // ---------------------------------------------------------------
@@ -168,5 +168,5 @@ export async function saveFound(found, existing, kind, onProgress=()=>{}){
 // Names + mailing addresses of found buyers with no phone, for your skip-trace service.
 export function buyerSkipCsv(list){
   const rows = [['Name','Company','Mailing Address','Markets','Purchases'], ...list.map(b=>[b.name, b.company||'', b.mailing||'', (b.markets||[]).join('; '), b.buys||b.owned||''])]
-  return rows.map(r=>r.map(v=>'"'+String(v??'').replace(/"/g,'""')+'"').join(',')).join('\n')
+  return rows.map(r=>r.map(csvCell).join(',')).join('\n')
 }

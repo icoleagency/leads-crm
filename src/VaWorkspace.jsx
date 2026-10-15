@@ -1,3 +1,4 @@
+import { AccessPanel } from './Access'
 import { useState, useEffect, useCallback } from 'react'
 import { CoachingInbox, EodReport, LiveTeam, EodReview, CoachPanel, SetupNotice } from './VaTools'
 import { fetchReports, fetchNotes, vaToolsErr } from './vaTools'
@@ -17,14 +18,16 @@ const C = {
 const GRADE_C = { A:C.green, B:C.amber, C:C.orange, D:C.red }
 const STATES = ['NJ','FL','DE','PA','Other']
 
-export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloadTeam,reloadLeads,reloadActivity,meId,onMe,isMobile}){
+export default function VaWorkspace({lockedVa,access,leads,activity,campaigns,team,teamErr,reloadTeam,reloadLeads,reloadActivity,meId,onMe,isMobile}){
   const [work,setWork] = useState(null)   // { ids:[lead ids in list order], i:index } while working leads
   const [showManage,setShowManage] = useState(false)
   const [showAll,setShowAll] = useState(false)
   const [histFor,setHistFor] = useState('')
   const [qTab,setQTab] = useState('due')
   const me = team.find(m=>String(m.id)===meId) || null
-  const ownerView = meId==='owner' || !me
+  const ownerView = !lockedVa && (meId==='owner' || !me)
+  // A VA login always logs calls under its own name.
+  useEffect(()=>{ if(lockedVa && me) saveCaller(me.name) },[lockedVa, me])
   const [reports,setReports] = useState([])
   const [notes,setNotes] = useState([])
   const [toolsErr,setToolsErr] = useState('')
@@ -110,16 +113,20 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
           <h1 style={h1}>VA Workspace</h1>
           <p style={{color:C.muted,margin:'3px 0 0',fontSize:isMobile?12.5:13.5,maxWidth:600}}>{me ? 'Your numbers, your counties, and your call list.' : 'Pick who is working on this device, or view the whole team.'}</p>
         </div>
-        <label style={{color:C.muted,fontSize:12,display:'flex',alignItems:'center',gap:8}}>Working as
+        {!lockedVa && <label style={{color:C.muted,fontSize:12,display:'flex',alignItems:'center',gap:8}}>Working as
           <select value={meId} onChange={e=>pickMe(e.target.value)} style={{...sel,minWidth:170}}>
             <option value="">— choose —</option>
             {team.filter(m=>m.active!==false).map(m=><option key={m.id} value={String(m.id)}>{m.name}</option>)}
             <option value="owner">Owner view (whole team)</option>
           </select>
-        </label>
+        </label>}
       </div>
 
-      {team.length===0 &&
+      {lockedVa && !me && <div style={{...card,marginTop:16,borderColor:C.amber+'66'}}>
+        <div style={{fontWeight:700,fontSize:14}}>Your login isn't linked to a VA profile</div>
+        <div style={{color:C.muted,fontSize:13,marginTop:6,lineHeight:1.55}}>Ask the owner to link <b style={{color:C.cream}}>{access&&access.email}</b> to your name under VA Workspace → Manage team → Logins.</div>
+      </div>}
+      {!lockedVa && team.length===0 &&
       <div style={{...card,marginTop:16,borderColor:C.orange+'66'}}>
         <div style={{fontWeight:700,fontSize:14}}>Set up your team</div>
         <div style={{color:C.muted,fontSize:13,marginTop:6,lineHeight:1.55}}>Add your counties as campaigns, add each VA, and assign them to their counties. Then each VA picks their name above on their own computer.</div>
@@ -245,6 +252,7 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
       {ownerView && <div style={{marginTop:16}}>
         <button onClick={()=>setShowManage(!showManage)} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'8px 14px',fontSize:12.5,fontWeight:600,cursor:'pointer'}}>{showManage?'Hide':'Manage'} team & campaigns</button>
       </div>}
+      {ownerView && showManage && <AccessPanel team={team} isMobile={isMobile}/>}
       {ownerView && showManage && <Manage leads={leads} campaigns={campaigns} team={team} reloadTeam={reloadTeam} reloadLeads={reloadLeads} isMobile={isMobile}/>}
     </div>
   )

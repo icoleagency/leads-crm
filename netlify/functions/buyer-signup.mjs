@@ -18,7 +18,9 @@ export default async (req) => {
   const url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/\/$/,'')
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY
   if(!url || !key) return json({ ok:false, error:'The sign-up form is not connected to the database yet.' }, 500)
-  let b; try{ b = await req.json() }catch{ return json({ ok:false, error:'Bad request' }, 400) }
+  const raw = await req.text()
+  if(raw.length>20000) return json({ ok:false, error:'Too much data.' }, 413)
+  let b; try{ b = JSON.parse(raw) }catch{ return json({ ok:false, error:'Bad request' }, 400) }
   if(b.website) return json({ ok:true })                       // honeypot: bots fill hidden fields
   const name = str(b.name, 80), email = str(b.email, 120).toLowerCase(), ph = phone10(b.phone)
   if(name.length<2) return json({ ok:false, error:'Please add your name.' }, 400)
@@ -39,7 +41,8 @@ export default async (req) => {
     financing: FIN.includes(b.financing) ? b.financing : null,
     status:'active', source:'Sign-up form'+(profile.signup_source?' · '+profile.signup_source:''), updated_at:new Date().toISOString(),
   }
-  const H = { apikey:key, Authorization:'Bearer '+key, 'content-type':'application/json' }
+  // New-style keys (sb_…) go in the apikey header only; legacy JWT keys also go in Authorization.
+  const H = { apikey:key, 'content-type':'application/json', ...(String(key).startsWith('eyJ') ? { Authorization:'Bearer '+key } : {}) }
   const api = (path, opt={}) => fetch(url+'/rest/v1/'+path, { ...opt, headers:{ ...H, ...(opt.headers||{}) } })
   try{
     // already on the list? (same phone or email) -> update instead of adding a duplicate

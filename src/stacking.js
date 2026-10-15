@@ -48,6 +48,8 @@ export const leadKey = (address, city) => { const a=normAddr(address); return a 
 
 const STATE_NAMES = { 'NEW JERSEY':'NJ', FLORIDA:'FL', DELAWARE:'DE', PENNSYLVANIA:'PA', 'NEW YORK':'NY', MARYLAND:'MD' }
 const normState = s => { const u=String(s||'').trim().toUpperCase(); return STATE_NAMES[u] || u.slice(0,2) }
+// Spreadsheet-safe CSV cell: text starting with = + - @ could run as a formula in Excel.
+export const csvCell = v => { const t = String(v??''); return '"'+(/^[=+\-@\t\r]/.test(t) ? "'"+t : t).replace(/"/g,'""')+'"' }
 export function normPhone(p){
   let d = String(p||'').replace(/\D/g,'')
   if(d.length===11 && d[0]==='1') d = d.slice(1)
@@ -282,7 +284,7 @@ export function skipTraceCsv(props){
       'Property Address':p.address, 'Property City':p.city||'', 'Property State':p.state||'', 'Property Zip':p.zip||'',
       'Mailing Address':m.street||p.address, 'Mailing City':m.city||p.city||'', 'Mailing State':m.state||p.state||'', 'Mailing Zip':m.zip||p.zip||'' }
   })
-  return Papa.unparse(rows)
+  return Papa.unparse(rows, { escapeFormulae:true })
 }
 // Skip-trace results: add phones/emails onto properties you already have. Never creates properties or lists.
 export async function appendContacts(records, leads, onProgress=()=>{}){
@@ -509,7 +511,7 @@ export function downloadCsv(props, filename){
       'Mailing Address':p.mailing||'', 'Phone 1':ph[0]||'', 'Phone 2':ph[1]||'', 'Phone 3':ph[2]||'', 'Email':(p.emails||[])[0]||'',
       'Stack':(p.list_types||[]).length, 'Lists':(p.list_types||[]).join('; '), 'Est Value':d.value??'', 'Loan Balance':d.loan??'' }
   })
-  const blob = new Blob([Papa.unparse(rows)], {type:'text/csv'})
+  const blob = new Blob([Papa.unparse(rows, { escapeFormulae:true })], {type:'text/csv'})
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href), 2000)
 }

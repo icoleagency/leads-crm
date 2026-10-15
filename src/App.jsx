@@ -63,11 +63,13 @@ const NAV = [
   ['academy','A','Academy'],
 ]
 
-export default function App(){
+export default function App({access={role:'owner',state:'ok'},onSignOut}){
   const isMobile = useIsMobile()
-  const [page,setPage] = useState(()=>{ const m=getMe(); return m && m!=='owner' ? 'va' : 'today' })
-  const [meId,setMeId] = useState(getMe())
-  const onMe = id => { setMe(id); setMeId(id) }
+  // A VA login is locked to that VA; owners can switch who's working on this device.
+  const lockedVa = access.role==='va'
+  const [page,setPage] = useState(()=>{ const m=getMe(); return lockedVa || (m && m!=='owner') ? 'va' : 'today' })
+  const [meId,setMeId] = useState(()=> lockedVa ? String(access.member_id||'') : getMe())
+  const onMe = id => { if(lockedVa) return; setMe(id); setMeId(id) }
   const [menuOpen,setMenuOpen] = useState(false)
   const [rawLeads,setLeads] = useState([])
   const [loading,setLoading] = useState(true)
@@ -107,7 +109,7 @@ export default function App(){
   const analyzeLead = (id)=>{ setAnalyzeId(String(id)); setPage('comping'); window.scrollTo({top:0}) }
   const today = tally(inLastDays(activity,1))
   const meMember = team.find(m=>String(m.id)===meId)
-  const vaMode = !!meMember && meId!=='owner'
+  const vaMode = lockedVa || (!!meMember && meId!=='owner')
   const VA_PAGES = ['va','academy']
   const navItems = vaMode ? NAV.filter(([id])=>VA_PAGES.includes(id)) : NAV
   const view = vaMode && !VA_PAGES.includes(page) ? 'va' : page
@@ -120,7 +122,7 @@ export default function App(){
           <div style={{fontFamily:'Georgia,serif',fontSize:20,fontWeight:800,lineHeight:1}}>WHOLESALE<span style={{color:C.orange}}>OS</span></div>
           <div style={{color:C.muted,fontSize:9,letterSpacing:2,textTransform:'uppercase',marginTop:4}}>by Icole Agency</div>
         </div>
-        {vaMode && <div onClick={()=>go('va')} style={{background:C.panel,borderRadius:10,padding:'9px 12px',marginBottom:12,fontSize:12,cursor:'pointer'}}><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>Working as</div><div style={{fontWeight:700,marginTop:2}}>{meMember.name}</div></div>}
+        {vaMode && <div onClick={()=>go('va')} style={{background:C.panel,borderRadius:10,padding:'9px 12px',marginBottom:12,fontSize:12,cursor:'pointer'}}><div style={{color:C.muted,fontSize:10,textTransform:'uppercase',letterSpacing:1}}>Working as</div><div style={{fontWeight:700,marginTop:2}}>{meMember?meMember.name:'VA'}</div></div>}
         {navItems.map(([id,i,l])=>(
           <div key={id} onClick={()=>go(id)} style={{display:'flex',alignItems:'center',gap:11,background:view===id?C.orange:'transparent',color:view===id?C.ink:C.muted,borderRadius:9,padding:'11px 13px',fontSize:13,fontWeight:600,marginBottom:3,cursor:'pointer'}}>
             <span style={{fontSize:12,fontWeight:800,width:16}}>{i}</span>{l}
@@ -132,6 +134,10 @@ export default function App(){
           <div style={{fontSize:12,marginTop:5}}>{today.dials} dials, {today.contacts} contacts</div>
           <div style={{color:C.green,fontSize:12}}>{today.appointment} appts · {today.offer} offers</div>
         </div>
+        {onSignOut && <div style={{marginTop:10,padding:'0 4px',fontSize:11,color:C.muted,display:'flex',justifyContent:'space-between',gap:6,alignItems:'center'}}>
+          <span title={access.email} style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{access.email}</span>
+          <button onClick={onSignOut} style={{background:'none',border:'none',color:C.orange,fontSize:11.5,fontWeight:700,cursor:'pointer',padding:0,whiteSpace:'nowrap'}}>Sign out</button>
+        </div>}
       </div>}
 
       <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column'}}>
@@ -147,11 +153,13 @@ export default function App(){
               <span style={{fontWeight:800,width:16}}>{i}</span>{l}
             </div>
           ))}
+          {onSignOut && <div onClick={onSignOut} style={{padding:'10px 12px',fontSize:13,color:C.orange,fontWeight:700,borderTop:'1px solid '+C.line,marginTop:6}}>Sign out <span style={{color:C.muted,fontWeight:400,fontSize:11.5}}>· {access.email}</span></div>}
         </div>}
 
         <div style={{padding:isMobile?'18px 16px':'26px 30px',width:'100%',maxWidth:1240,margin:0,boxSizing:'border-box'}}>
           {err && <ErrorBanner msg={err} onRetry={load} onClose={()=>setErr('')}/>}
-          {view==='va' && <VaWorkspace leads={leads} activity={activity} campaigns={campaigns} team={team} teamErr={tErr} reloadTeam={loadTeam} reloadLeads={reloadQuiet} reloadActivity={loadActivity} meId={meId} onMe={onMe} isMobile={isMobile}/>}
+          {access.state==='setup' && !lockedVa && <div style={{background:C.amber+'18',border:'1px solid '+C.amber+'66',color:C.amber,borderRadius:10,padding:'10px 14px',fontSize:13,marginBottom:14,lineHeight:1.5}}><b>Security setup isn't finished.</b> You're signed in, but the database is still open to anyone with the site's public key. Run the lock-down SQL (supabase/lock-down.sql) in Supabase to make it private.</div>}
+          {view==='va' && <VaWorkspace lockedVa={lockedVa} access={access} leads={leads} activity={activity} campaigns={campaigns} team={team} teamErr={tErr} reloadTeam={loadTeam} reloadLeads={reloadQuiet} reloadActivity={loadActivity} meId={meId} onMe={onMe} isMobile={isMobile}/>}
           {view==='leads' && <LeadsPage key={focusId||'all'} initialSel={focusId} campaigns={campaigns} leads={leads} loading={loading} reload={load} reloadQuiet={reloadQuiet} loadErr={err} activity={activity} reloadActivity={loadActivity} onAnalyze={analyzeLead} isMobile={isMobile}/>}
           {view==='lists' && <ListStacking leads={leads} campaigns={campaigns} reloadLeads={reloadQuiet} openLead={openLead} isMobile={isMobile}/>}
           {view==='comping' && <DealAnalyzer key={analyzeId||'blank'} leads={leads} initialLeadId={analyzeId} reload={load} isMobile={isMobile}/>}
