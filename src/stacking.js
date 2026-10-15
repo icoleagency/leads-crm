@@ -180,10 +180,151 @@ function mergeFields(a, b){
 // ---------- errors ----------
 export function stackErr(msg){
   const m = String(msg||'')
+  if(/\b(score|equity_pct|est_value|owner_type|years_owned|out_of_state|absentee|filed_on)\b/i.test(m) && /column|schema cache|does not exist|find/i.test(m))
+    return 'upgrade'
   if(/propert(y_lists|ies)|remove_property_list|schema cache|relation .* does not exist/i.test(m))
     return 'setup'
   if(/failed to fetch|network/i.test(m)) return "Can't reach the database right now — give it a minute, then retry."
   return m
+}
+
+// ---------- smart score ----------
+// How much each list type says "this owner may need to sell".
+export const TYPE_WEIGHT = { 'Pre-foreclosure':30, 'Lis pendens':30, 'Probate / inherited':25, 'Tax delinquent':22, 'Divorce':20,
+  'Code violation':18, 'Vacant':18, 'Eviction':15, 'Bankruptcy':15, 'Liens':15, 'Tired landlord':12, 'Expired listing':12,
+  'Free & clear':12, 'Absentee owner':10, 'High equity':10, 'Other':8 }
+export function parseDate(s){
+  const t = String(s||'').trim(); if(!t) return null
+  let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/); if(m) return m[1]+'-'+m[2].padStart(2,'0')+'-'+m[3].padStart(2,'0')
+  m = t.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/)
+  if(m){ const y = m[3].length===2 ? (Number(m[3])>50?'19':'20')+m[3] : m[3]; return y+'-'+m[1].padStart(2,'0')+'-'+m[2].padStart(2,'0') }
+  return null
+}
+export function ownerCategory(t){
+  const s = String(t||'').toLowerCase(); if(!s) return null
+  if(/deceased|estate|probate|personal rep|heir/.test(s)) return 'estate'
+  if(/gov|hoa|lien|bank|lender/.test(s)) return 'check'
+  if(/trust/.test(s)) return 'trust'
+  if(/llc|company|corp|inc|business/.test(s)) return 'company'
+  return 'individual'
+}
+// Facts read straight off a property record.
+export function analyzeProperty(p){
+  const d = p.data||{}
+  const mailStreet = String(p.mailing||'').split(',')[0]
+  const mailState = (String(p.mailing||'').match(/,\s*([A-Za-z]{2})\s*\d{0,5}(-\d{4})?\s*$/)||[])[1]
+  const out_of_state = !!(mailState && p.state && mailState.toUpperCase()!==String(p.state).toUpperCase())
+  const absentee = out_of_state || d.occupancy==='Absentee' || !!(mailStreet && normAddr(mailStreet)!==normAddr(p.address) && !/^p\.?\s*o\.?\s*box/i.test(mailStreet))
+  const value = Number(d.value)||null
+  const loan = d.loan!==undefined && d.loan!==null ? Number(d.loan) : (value && d.equity!==undefined ? value-Number(d.equity) : null)
+  const equity_pct = value && loan!==null ? Math.max(-100, Math.min(100, Math.round((value-loan)/value*100))) : null
+  const yr = (String(d.last_sale_date||'').match(/(19|20)\d\d/)||[])[0]
+  const years_owned = yr ? Math.max(0, new Date().getFullYear()-Number(yr)) : null
+  const filed_on = parseDate(d.record_date)
+  return { out_of_state, absentee, est_value:value, loan, equity_pct, years_owned, filed_on, owner_type:ownerCategory(d.owner_type), mailState }
+}
+// 0–100: list types (weighted) + what the record tells us. Returns the reasons too.
+export function scoreProperty(p){
+  const a = analyzeProperty(p), why = []
+  const add = (pts, label) => { if(pts) why.push([pts, label]) }
+  const types = p.list_types||[]
+  for(const t of types) add(TYPE_WEIGHT[t]??8, t)
+  if(types.length>=2) add((types.length-1)*5, 'On '+types.length+' lists')
+  if(a.equity_pct!==null){
+    if(a.equity_pct>=100) add(12,'Free & clear')
+    else if(a.equity_pct>=50) add(8,a.equity_pct+'% equity')
+    else if(a.equity_pct>=30) add(3,a.equity_pct+'% equity')
+    else if(a.equity_pct<10) add(-12,'Low equity ('+a.equity_pct+'%) — hard to wholesale')
+  }
+  if(a.out_of_state) add(8,'Out-of-state owner'); else if(a.absentee) add(5,'Absentee owner')
+  if(a.years_owned!==null && a.years_owned>=15) add(5,'Owned '+a.years_owned+' years')
+  if(a.owner_type==='estate') add(10,'Estate / probate')
+  if(a.owner_type==='company') add(-3,'Company owned')
+  if(a.owner_type==='check') add(-6,'Name may be a lender/HOA')
+  if(a.filed_on){ const days = Math.floor((Date.now()-new Date(a.filed_on+'T12:00').getTime())/86400000)
+    if(days>=0 && days<=30) add(10,'Filed '+days+' days ago'); else if(days>30 && days<=90) add(5,'Filed in the last 90 days') }
+  const score = Math.max(0, Math.min(100, why.reduce((s,[n])=>s+n,0)))
+  return { score, why:why.sort((x,y)=>y[0]-x[0]), facts:a }
+}
+export const scoreLabel = s => s>=70 ? ['Hot','#e5573f'] : s>=50 ? ['Warm','#ff6b1a'] : s>=30 ? ['Mild','#f5b942'] : ['Cold','#88a0b4']
+// Columns stored on each property so the database can sort and filter.
+export function derivedColumns(p){
+  const { score, facts:a } = scoreProperty(p)
+  return { score, equity_pct:a.equity_pct, est_value:a.est_value, owner_type:a.owner_type, years_owned:a.years_owned,
+    out_of_state:a.out_of_state, absentee:a.absentee, filed_on:a.filed_on }
+}
+// Recalculate stored scores (all rows, or only ones never scored).
+export async function rescore({onlyMissing=true, onProgress=()=>{}}={}){
+  const rows = await fetchAllRows(()=>{ let q = supabase.from('properties').select('*').order('id'); return onlyMissing ? q.is('score', null) : q })
+  const out = rows.map(p=>({ addr_key:p.addr_key, address:p.address, ...derivedColumns(p) }))
+  for(let i=0;i<out.length;i+=500){
+    const { error } = await supabase.from('properties').upsert(out.slice(i,i+500), { onConflict:'addr_key' })
+    if(error) throw error
+    onProgress('Scoring… '+Math.min(i+500,out.length).toLocaleString()+' / '+out.length.toLocaleString())
+  }
+  return out.length
+}
+
+// ---------- skip trace ----------
+function splitMailing(m){
+  const parts = String(m||'').split(',').map(x=>x.trim()).filter(Boolean)
+  const last = parts.length>1 ? parts[parts.length-1] : ''
+  const sz = last.match(/^([A-Za-z]{2})\s*(\d{5})?/)
+  if(sz) return { street:parts.slice(0, parts.length>2?parts.length-2:1).join(', '), city:parts.length>2?parts[parts.length-2]:'', state:sz[1], zip:sz[2]||'' }
+  return { street:parts[0]||'', city:parts[1]||'', state:'', zip:'' }
+}
+export function skipTraceCsv(props){
+  const rows = props.map(p=>{
+    const company = /\b(llc|inc|corp|trust|estate|bank|association|hoa|company|ltd|lp)\b/i.test(p.owner_name||'')
+    const nm = String(p.owner_name||'').trim().split(/\s+/)
+    const m = splitMailing(p.mailing)
+    return { 'First Name': company?'':(nm.length>1?nm.slice(0,-1).join(' '):''), 'Last Name': company?p.owner_name:(nm.length?nm[nm.length-1]:''),
+      'Property Address':p.address, 'Property City':p.city||'', 'Property State':p.state||'', 'Property Zip':p.zip||'',
+      'Mailing Address':m.street||p.address, 'Mailing City':m.city||p.city||'', 'Mailing State':m.state||p.state||'', 'Mailing Zip':m.zip||p.zip||'' }
+  })
+  return Papa.unparse(rows)
+}
+// Skip-trace results: add phones/emails onto properties you already have. Never creates properties or lists.
+export async function appendContacts(records, leads, onProgress=()=>{}){
+  const existing = new Map()
+  for(const part of chunks(records.map(r=>r.addr_key), 100)){
+    const { data, error } = await supabase.from('properties').select('*').in('addr_key', part)
+    if(error) throw error
+    for(const p of data||[]) existing.set(p.addr_key, p)
+  }
+  let phonesAdded = 0, matched = 0
+  const rows = []
+  for(const r of records){
+    const e = existing.get(r.addr_key); if(!e) continue
+    matched++
+    const phones = uniq([...(e.phones||[]), ...(r.phones||[])]), emails = uniq([...(e.emails||[]), ...(r.emails||[])])
+    phonesAdded += phones.length-(e.phones||[]).length
+    if(phones.length===(e.phones||[]).length && emails.length===(e.emails||[]).length && (e.owner_name || !r.owner_name)) continue
+    rows.push({ addr_key:e.addr_key, address:e.address, phones, emails, owner_name:e.owner_name||r.owner_name||null, mailing:e.mailing||r.mailing||null, updated_at:new Date().toISOString(), _lead:e.lead_id })
+  }
+  for(let i=0;i<rows.length;i+=500){
+    const { error } = await supabase.from('properties').upsert(rows.slice(i,i+500).map(({_lead,...x})=>x), { onConflict:'addr_key' }) // eslint-disable-line no-unused-vars
+    if(error) throw error
+    onProgress('Adding numbers… '+Math.min(i+500,rows.length)+' / '+rows.length)
+  }
+  // push new numbers onto linked leads
+  const leadById = new Map((leads||[]).map(l=>[String(l.id), l]))
+  const linked = rows.filter(r=>r._lead && leadById.has(String(r._lead)))
+  for(const part of chunks(linked, 10)){
+    await Promise.all(part.map(r=>{ const l = leadById.get(String(r._lead))
+      return patchLead(l, { phones:uniq([...((l.details||{}).phones||[]), ...r.phones]) }, { ...(l.phone?{}:{phone:r.phones[0]||''}), skiptraced:r.phones.length>0 }) }))
+  }
+  return { matched, unmatched:records.length-matched, phonesAdded, updated:rows.length, leadsUpdated:linked.length }
+}
+export async function matchShare(records){
+  const keys = records.slice(0,300).map(r=>r.addr_key); if(!keys.length) return 0
+  let hit = 0
+  for(const part of chunks(keys, 100)){
+    const { data, error } = await supabase.from('properties').select('addr_key').in('addr_key', part)
+    if(error) return 0
+    hit += (data||[]).length
+  }
+  return hit/keys.length
 }
 
 // ---------- import ----------
@@ -222,7 +363,7 @@ export async function importList({records, name, type, campaign, leads, onProgre
       campaign:(e && e.campaign) || campaign || null, data:base.data||{},
       lead_id:(e && e.lead_id) || (match ? String(match.id) : null), updated_at:now,
     }
-  })
+  }).map(row=>({ ...row, ...derivedColumns(row) }))
 
   const saved = []
   let done = 0
@@ -248,7 +389,26 @@ export async function importList({records, name, type, campaign, leads, onProgre
 // ---------- browse ----------
 export function queryProps(f, from, to){
   let q = supabase.from('properties').select('*',{count:'exact'})
-    .order('stack',{ascending:false}).order('updated_at',{ascending:false}).range(from,to)
+  const desc = (c)=>{ q = q.order(c,{ascending:false, nullsFirst:false}) }
+  const sort = f.sort||'score'
+  if(sort==='stack'){ desc('stack'); desc('score') }
+  else if(sort==='filed'){ desc('filed_on'); desc('score') }
+  else if(sort==='added'){ desc('created_at') }
+  else if(sort==='equity'){ desc('equity_pct'); desc('score') }
+  else { desc('score'); desc('stack') }
+  q = q.order('id',{ascending:true}).range(from,to)
+  if(f.minScore) q = q.gte('score', f.minScore)
+  if(f.equity==='fc') q = q.gte('equity_pct', 100); else if(f.equity) q = q.gte('equity_pct', Number(f.equity))
+  if(f.minValue) q = q.gte('est_value', Number(f.minValue))
+  if(f.maxValue) q = q.lte('est_value', Number(f.maxValue))
+  if(f.ownerType) q = q.eq('owner_type', f.ownerType)
+  if(f.minYears) q = q.gte('years_owned', Number(f.minYears))
+  if(f.outOfState) q = q.eq('out_of_state', true)
+  else if(f.absentee) q = q.eq('absentee', true)
+  const ago = n => new Date(Date.now()-Number(n)*86400000)
+  if(f.filedWithin) q = q.gte('filed_on', ago(f.filedWithin).toISOString().slice(0,10))
+  if(f.addedWithin) q = q.gte('created_at', ago(f.addedWithin).toISOString())
+  if(f.noPhone) q = q.eq('has_phone', false)
   if(f.min>1) q = q.gte('stack', f.min)
   if(f.type) q = q.contains('list_types', [f.type])
   if(f.state) q = q.eq('state', f.state)
@@ -271,10 +431,10 @@ export async function fetchAllMatching(f, cap=5000){
 }
 export async function fetchStackStats(){
   const head = () => supabase.from('properties').select('id',{count:'exact',head:true})
-  const rs = await Promise.all([head(), head().gte('stack',2), head().gte('stack',3), head().gte('stack',4), head().eq('has_phone',true)])
+  const rs = await Promise.all([head(), head().gte('stack',2), head().gte('stack',3), head().gte('stack',4), head().eq('has_phone',true), head().gte('score',70), head().eq('has_phone',false), head().is('score',null)])
   const bad = rs.find(r=>r.error); if(bad) throw bad.error
-  const [total,s2,s3,s4,phones] = rs.map(r=>r.count||0)
-  return { total, s2, s3, s4, phones }
+  const [total,s2,s3,s4,phones,hot,noPhone,unscored] = rs.map(r=>r.count||0)
+  return { total, s2, s3, s4, phones, hot, noPhone, unscored }
 }
 export async function fetchLists(){
   const { data, error } = await supabase.from('property_lists').select('*').order('created_at',{ascending:false})
@@ -316,7 +476,7 @@ export async function sendToLeads(props, {leads, campaign, onProgress=()=>{}}){
       return {
         name:p.owner_name||'Unknown owner', address:p.address, city:p.city||'', state:p.state||'NJ',
         lead_type:topType(p.list_types), arv:d.value||0, owed:d.loan||0, phone:(p.phones||[])[0]||'',
-        freshness:100, times_contacted:0, motivation:Math.min(95, 35+stack*15), skiptraced:(p.phones||[]).length>0,
+        freshness:100, times_contacted:0, motivation:Math.max(30, Math.min(95, p.score ?? (35+stack*15))), skiptraced:(p.phones||[]).length>0,
         details:{ ...BLANK_DETAILS, repairs:{}, beds:d.beds||'', baths:d.baths||'', sqft:d.sqft||'', year_built:d.year_built||'',
           campaign:campaign||p.campaign||'', lists:p.list_types||[], stack, property_id:String(p.id),
           phones:p.phones||[], emails:p.emails||[], mailing:p.mailing||'', zip:p.zip||'', county:p.county||'',
@@ -360,24 +520,17 @@ export async function updateProperty(id, patch){
 }
 // Signals we can read straight off the record (no extra data needed).
 export function propertySignals(p){
-  const d = p.data||{}, out = []
-  const mailStreet = String(p.mailing||'').split(',')[0]
-  const mailState = (String(p.mailing||'').match(/,\s*([A-Za-z]{2})\s*\d{0,5}(-\d{4})?\s*$/)||[])[1]
-  const absentee = d.occupancy==='Absentee' || (mailStreet && normAddr(mailStreet)!==normAddr(p.address) && !/^po box/i.test(mailStreet) ? true : false)
-  if(mailState && p.state && mailState.toUpperCase()!==String(p.state).toUpperCase()) out.push(['Out-of-state owner','#4aa8ff','Mails to '+mailState.toUpperCase()])
-  else if(absentee) out.push(['Absentee owner','#4aa8ff','Mailing address is different from the property'])
-  if(d.value){
-    const loan = d.loan!==undefined ? d.loan : d.equity!==undefined ? d.value-d.equity : null
-    if(loan===0) out.push(['Free & clear','#3fd08a','No open loans on record'])
-    else if(loan!==null && (d.value-loan)/d.value>=0.5) out.push(['High equity','#3fd08a',Math.round((d.value-loan)/d.value*100)+'% equity'])
-  }
-  const yr = (String(d.last_sale_date||'').match(/(19|20)\d\d/)||[])[0]
-  if(yr){ const yrs = new Date().getFullYear()-Number(yr); if(yrs>=15) out.push(['Owned '+yrs+' years','#f5b942','Long ownership usually means big equity and low urgency to stay']) }
-  const ot = String(d.owner_type||'')
-  if(/deceased|estate|probate|personal rep/i.test(ot)) out.push(['Estate / probate','#e5573f','Talk to the executor or heirs'])
-  else if(/llc|company|corp|inc/i.test(ot)) out.push(['Company owned','#88a0b4','Ask for the decision maker'])
-  else if(/trust/i.test(ot)) out.push(['Trust','#88a0b4','Ask for the trustee'])
-  else if(/gov|hoa|lien/i.test(ot)) out.push(['Check owner','#f5b942','Name on file may be a lender or HOA'])
+  const a = analyzeProperty(p), out = []
+  if(a.out_of_state) out.push(['Out-of-state owner','#4aa8ff','Mails to '+String(a.mailState||'').toUpperCase()])
+  else if(a.absentee) out.push(['Absentee owner','#4aa8ff','Mailing address is different from the property'])
+  if(a.equity_pct!==null){ if(a.equity_pct>=100) out.push(['Free & clear','#3fd08a','No open loans on record'])
+    else if(a.equity_pct>=50) out.push(['High equity','#3fd08a',a.equity_pct+'% equity'])
+    else if(a.equity_pct<10) out.push(['Low equity','#e5573f',a.equity_pct+'% equity — little room for a discount']) }
+  if(a.years_owned!==null && a.years_owned>=15) out.push(['Owned '+a.years_owned+' years','#f5b942','Long ownership usually means big equity'])
+  if(a.owner_type==='estate') out.push(['Estate / probate','#e5573f','Talk to the executor or heirs'])
+  else if(a.owner_type==='company') out.push(['Company owned','#88a0b4','Ask for the decision maker'])
+  else if(a.owner_type==='trust') out.push(['Trust','#88a0b4','Ask for the trustee'])
+  else if(a.owner_type==='check') out.push(['Check owner','#f5b942','Name on file may be a lender or HOA'])
   if(!(p.phones||[]).length) out.push(['Needs skip trace','#f5b942','No phone numbers yet'])
   return out
 }

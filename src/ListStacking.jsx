@@ -3,7 +3,8 @@ import { money, STAGE } from './leadModel'
 import { ResearchLinks } from './LeadPanels'
 import { campaignName } from './team'
 import { TYPE_NAMES, guessType, STACK_COLOR, FIELDS, MAIN_FIELDS, autoMap, parseCsv, buildRecords, importList,
-  queryProps, fetchAllMatching, fetchStackStats, fetchLists, removeList, syncLeadStacks, sendToLeads, updateProperty, propertySignals, downloadCsv, stackErr, fmtPhone } from './stacking'
+  queryProps, fetchAllMatching, fetchStackStats, fetchLists, removeList, syncLeadStacks, sendToLeads, updateProperty, propertySignals, downloadCsv, stackErr, fmtPhone,
+  rescore, scoreProperty, scoreLabel, skipTraceCsv, appendContacts, matchShare } from './stacking'
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -11,9 +12,12 @@ const C = {
   green:'#3fd08a', amber:'#f5b942', red:'#e5573f', blue:'#4aa8ff'
 }
 const PAGE = 100
-const errText = e => { const m = stackErr(e.message); return m==='setup' ? 'List Stacking tables are missing — run supabase/add-list-stacking.sql in Supabase first.' : m }
+const errText = e => { const m = stackErr(e.message); return m==='setup' ? 'List Stacking tables are missing — run supabase/add-list-stacking.sql in Supabase first.' : m==='upgrade' ? 'List Stacking needs its upgrade — run supabase/add-stack-score.sql in Supabase.' : m }
+const SKIP = '__skip'
+function saveFile(text, name){ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([text],{type:'text/csv'})); a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),2000) }
 const STATES = ['NJ','FL','DE','PA']
-const BLANK_F = { min:1, type:'', state:'', campaign:'', phone:false, hideLeads:false, q:'' }
+const BLANK_F = { min:1, type:'', state:'', campaign:'', phone:false, hideLeads:false, q:'', sort:'score', minScore:0, equity:'', minValue:'', maxValue:'', ownerType:'', ownerLoc:'', minYears:'', filedWithin:'', addedWithin:'', noPhone:false }
+const withLoc = f => ({...f, absentee:f.ownerLoc==='absentee', outOfState:f.ownerLoc==='oos'})
 
 export default function ListStacking({leads,campaigns,reloadLeads,openLead,isMobile}){
   const [f,setF] = useState(BLANK_F)
@@ -34,7 +38,7 @@ export default function ListStacking({leads,campaigns,reloadLeads,openLead,isMob
   const load = useCallback(async (filters, append, offset=0)=>{
     setLoading(true)
     try{
-      const { data, count:n, error } = await queryProps(filters, offset, offset+PAGE-1)
+      const { data, count:n, error } = await queryProps(withLoc(filters), offset, offset+PAGE-1)
       if(error) throw error
       setRows(r=>append ? [...r, ...(data||[])] : (data||[])); setCount(n||0); setErr('')
     }catch(e){ setErr(stackErr(e.message)) }
@@ -50,6 +54,12 @@ export default function ListStacking({leads,campaigns,reloadLeads,openLead,isMob
     return ()=>clearTimeout(t)
   },[f,load])
   const refresh = ()=>{ load(f); loadMeta(); setPicked(new Set()); setAllMatching(false) }
+  const [scoring,setScoring] = useState('')
+  useEffect(()=>{
+    if(!stats || !stats.unscored || scoring) return
+    setScoring('Scoring your properties…')
+    rescore({onlyMissing:true, onProgress:setScoring}).then(()=>{ setScoring(''); load(f); loadMeta() }).catch(e=>{ setScoring(''); setErr(stackErr(e.message)) })
+  },[stats]) // eslint-disable-line react-hooks/exhaustive-deps
   const setFf = (k,v)=>setF(x=>({...x,[k]:v}))
 
   const h1 = {fontFamily:'Georgia,serif',fontSize:isMobile?22:27,margin:0,fontWeight:600}
@@ -58,6 +68,16 @@ export default function ListStacking({leads,campaigns,reloadLeads,openLead,isMob
   const inp = {background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'8px 10px',color:C.cream,fontSize:13,outline:'none',boxSizing:'border-box',minWidth:0}
   const btn = p => ({background:p?C.orange:'transparent',color:p?C.ink:C.muted,border:'1px solid '+(p?C.orange:C.line),borderRadius:8,padding:'8px 13px',fontSize:12,fontWeight:700,cursor:busy?'default':'pointer',opacity:busy?0.6:1,whiteSpace:'nowrap'})
 
+  if(err==='upgrade') return (
+    <div>
+      <h1 style={h1}>List Stacking</h1>
+      <div style={{...card,marginTop:20,borderColor:C.amber+'66'}}>
+        <div style={{color:C.amber,fontWeight:700,fontSize:14,marginBottom:8}}>One quick database update</div>
+        <div style={{color:C.cream,fontSize:13.5,lineHeight:1.6}}>The new smart score and filters need a few extra columns. In Supabase open <b>SQL Editor → + New query</b>, paste the SQL from <b>supabase/add-stack-score.sql</b>, and hit <b>Run</b>. Then press Retry — your properties get scored automatically.</div>
+        <button onClick={()=>{ setErr(''); refresh() }} style={{...btn(true),marginTop:14}}>Retry</button>
+      </div>
+    </div>
+  )
   if(err==='setup') return (
     <div>
       <h1 style={h1}>List Stacking</h1>
@@ -77,7 +97,7 @@ export default function ListStacking({leads,campaigns,reloadLeads,openLead,isMob
   async function doSend(){
     setBusy('send'); setMsg(null)
     try{
-      const props = allMatching ? await fetchAllMatching(f) : pickedRows
+      const props = allMatching ? await fetchAllMatching(withLoc(f)) : pickedRows
       const r = await sendToLeads(props, { leads, campaign:sendCamp, onProgress:t=>setMsg({ok:true,t}) })
       setMsg({ok:true,t:'Sent to Leads: '+r.created+' new lead'+(r.created===1?'':'s')+(r.linked?' · '+r.linked+' matched existing leads':'')+(r.skipped?' · '+r.skipped+' already in Leads':'')+'.'})
       await reloadLeads(); refresh()
@@ -87,26 +107,38 @@ export default function ListStacking({leads,campaigns,reloadLeads,openLead,isMob
   async function doExport(){
     setBusy('export'); setMsg(null)
     try{
-      const props = nPicked ? (allMatching ? await fetchAllMatching(f) : pickedRows) : await fetchAllMatching(f)
+      const props = nPicked ? (allMatching ? await fetchAllMatching(withLoc(f)) : pickedRows) : await fetchAllMatching(withLoc(f))
       downloadCsv(props, 'stacked-list-'+new Date().toISOString().slice(0,10)+'.csv')
       setMsg({ok:true,t:'Exported '+props.length.toLocaleString()+' properties.'})
+    }catch(e){ setMsg({ok:false,t:errText(e)}) }
+    setBusy('')
+  }
+  async function doSkipExport(){
+    setBusy('skip'); setMsg(null)
+    try{
+      const props = await fetchAllMatching(withLoc({...f, noPhone:true, phone:false}), 20000)
+      if(!props.length) throw new Error('Every property in this view already has a phone number.')
+      saveFile(skipTraceCsv(props), 'skip-trace-'+new Date().toISOString().slice(0,10)+'.csv')
+      setMsg({ok:true,t:'Exported '+props.length.toLocaleString()+' properties with no phone. Run them through your skip tracer, then upload the results with list type "Skip-trace results — add phones only".'})
     }catch(e){ setMsg({ok:false,t:errText(e)}) }
     setBusy('')
   }
   async function doRemove(l){
     if(!confirm('Remove the list "'+l.name+'"? Properties only on this list are deleted (unless already sent to Leads); everything else drops one from its stack.')) return
     setBusy('remove'); setMsg(null)
-    try{ await removeList(l.id); const n = await syncLeadStacks(leads); if(n) await reloadLeads(); setMsg({ok:true,t:'Removed "'+l.name+'".'}); refresh() }
+    try{ await removeList(l.id); await rescore({onlyMissing:false}); const n = await syncLeadStacks(leads); if(n) await reloadLeads(); setMsg({ok:true,t:'Removed "'+l.name+'".'}); refresh() }
     catch(e){ setMsg({ok:false,t:errText(e)}) }
     setBusy('')
   }
 
   const tiles = stats ? [
-    ['Properties', stats.total, 1, C.cream],
-    ['On 2+ lists', stats.s2, 2, C.amber],
-    ['On 3+ lists', stats.s3, 3, C.orange],
-    ['On 4+ lists', stats.s4, 4, C.red],
+    ['Properties', stats.total, stats.phones.toLocaleString()+' with phones', C.cream, ()=>setF(BLANK_F), JSON.stringify(f)===JSON.stringify(BLANK_F)],
+    ['Hot (score 70+)', stats.hot, stats.total?Math.round(stats.hot/stats.total*100)+'% of all':'', C.red, ()=>setF({...BLANK_F, minScore:70}), f.minScore===70],
+    ['On 2+ lists', stats.s2, stats.s3.toLocaleString()+' on 3+', C.amber, ()=>setF({...BLANK_F, min:2}), f.min===2],
+    ['Need skip trace', stats.noPhone, 'no phone number yet', C.blue, ()=>setF({...BLANK_F, noPhone:true}), f.noPhone],
   ] : []
+  const moreCount = ['minScore','equity','minValue','maxValue','ownerType','ownerLoc','minYears','filedWithin','addedWithin'].filter(k=>f[k]).length
+  const sel2 = (k, opts, w) => <select value={f[k]} onChange={e=>setFf(k, e.target.value)} style={{...inp, ...(w?{width:w}:{}), borderColor:f[k]?C.orange:C.line}}>{opts.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
 
   return (
     <div>
@@ -118,17 +150,17 @@ export default function ListStacking({leads,campaigns,reloadLeads,openLead,isMob
         <button onClick={()=>setShowUpload(!showUpload)} style={btn(true)}>{showUpload?'Close':'+ Upload list'}</button>
       </div>
 
+      {scoring && <div style={{...card,borderColor:C.blue+'55',color:C.blue,fontSize:13,marginBottom:14,padding:12}}>{scoring}</div>}
       {err && <div style={{...card,borderColor:C.red+'66',color:C.red,fontSize:13,marginBottom:14}}>{err} <button onClick={refresh} style={{...btn(false),marginLeft:8,padding:'4px 10px'}}>Retry</button></div>}
       {showUpload && <Upload leads={leads} campaigns={campaigns} isMobile={isMobile} onDone={()=>{ refresh(); reloadLeads() }} card={card} inp={inp} btn={btn} cap={cap}/>}
 
       {stats &&
       <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(4,1fr)',gap:10,marginBottom:14}}>
-        {tiles.map(([l,n,min,c])=>(
-          <div key={l} onClick={()=>setFf('min',min)} style={{...card,padding:14,cursor:'pointer',borderColor:f.min===min?c:C.line}}>
+        {tiles.map(([l,n,sub,c,onClick,on])=>(
+          <div key={l} onClick={onClick} style={{...card,padding:14,cursor:'pointer',borderColor:on?c:C.line}}>
             <div style={cap}>{l}</div>
             <div style={{fontSize:24,fontWeight:800,color:c,marginTop:4}}>{n.toLocaleString()}</div>
-            {min>1 && stats.total>0 && <div style={{color:C.muted,fontSize:11.5}}>{Math.round(n/stats.total*100)}% of all</div>}
-            {min===1 && <div style={{color:C.muted,fontSize:11.5}}>{stats.phones.toLocaleString()} with phones</div>}
+            <div style={{color:C.muted,fontSize:11.5}}>{sub}</div>
           </div>
         ))}
       </div>}
@@ -153,8 +185,22 @@ export default function ListStacking({leads,campaigns,reloadLeads,openLead,isMob
           <select value={f.state} onChange={e=>setFf('state',e.target.value)} style={inp}><option value="">All states</option>{STATES.map(s=><option key={s}>{s}</option>)}</select>
           <select value={f.campaign} onChange={e=>setFf('campaign',e.target.value)} style={inp}><option value="">All campaigns</option>{campaigns.map(c=><option key={c.id} value={String(c.id)}>{c.name}</option>)}<option value="none">No campaign</option></select>
         </div>
+        <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(5,minmax(0,1fr))',gap:8,marginTop:8}}>
+          {sel2('sort',[['score','Sort: best score'],['stack','Sort: most lists'],['filed','Sort: newest filing'],['added','Sort: recently added'],['equity','Sort: most equity']])}
+          {sel2('minScore',[[0,'Any score'],[50,'Warm 50+'],[70,'Hot 70+']])}
+          {sel2('equity',[['','Any equity'],['30','30%+ equity'],['50','50%+ equity'],['fc','Free & clear']])}
+          {sel2('ownerType',[['','Any owner'],['individual','Individual'],['estate','Estate / probate'],['company','Company / LLC'],['trust','Trust'],['check','Check owner (lender/HOA)']])}
+          {sel2('ownerLoc',[['','Owner lives anywhere'],['absentee','Absentee owner'],['oos','Out-of-state owner']])}
+          {sel2('filedWithin',[['','Filed any time'],['7','Filed last 7 days'],['14','Filed last 14 days'],['30','Filed last 30 days'],['90','Filed last 90 days']])}
+          {sel2('addedWithin',[['','Added any time'],['7','Added this week'],['30','Added last 30 days']])}
+          {sel2('minYears',[['','Any years owned'],['10','Owned 10+ years'],['20','Owned 20+ years']])}
+          <input type="number" value={f.minValue} onChange={e=>setFf('minValue',e.target.value)} placeholder="Min value $" style={{...inp,borderColor:f.minValue?C.orange:C.line}}/>
+          <input type="number" value={f.maxValue} onChange={e=>setFf('maxValue',e.target.value)} placeholder="Max value $" style={{...inp,borderColor:f.maxValue?C.orange:C.line}}/>
+        </div>
         <div style={{display:'flex',gap:16,marginTop:10,flexWrap:'wrap',fontSize:12.5,color:C.muted}}>
-          <label style={{display:'flex',gap:6,alignItems:'center',cursor:'pointer'}}><input type="checkbox" checked={f.phone} onChange={e=>setFf('phone',e.target.checked)}/>Has phone number</label>
+          {moreCount>0 && <span style={{color:C.orange}}>{moreCount} extra filter{moreCount===1?'':'s'} on</span>}
+          <label style={{display:'flex',gap:6,alignItems:'center',cursor:'pointer'}}><input type="checkbox" checked={f.phone} onChange={e=>setF(x=>({...x,phone:e.target.checked,noPhone:false}))}/>Has phone number</label>
+          <label style={{display:'flex',gap:6,alignItems:'center',cursor:'pointer'}}><input type="checkbox" checked={f.noPhone} onChange={e=>setF(x=>({...x,noPhone:e.target.checked,phone:false}))}/>Needs skip trace</label>
           <label style={{display:'flex',gap:6,alignItems:'center',cursor:'pointer'}}><input type="checkbox" checked={f.hideLeads} onChange={e=>setFf('hideLeads',e.target.checked)}/>Hide ones already in Leads</label>
           {JSON.stringify(f)!==JSON.stringify(BLANK_F) && <span onClick={()=>setF(BLANK_F)} style={{color:C.orange,cursor:'pointer'}}>Clear filters</span>}
         </div>
@@ -178,6 +224,7 @@ export default function ListStacking({leads,campaigns,reloadLeads,openLead,isMob
               <button disabled={!!busy} onClick={doSend} style={btn(true)}>{busy==='send'?'Sending…':'Send '+nPicked.toLocaleString()+' to Leads'}</button>
             </>}
             <button disabled={!!busy||!count} onClick={doExport} style={btn(false)}>{busy==='export'?'Exporting…':nPicked?'Export selected':'Export CSV'}</button>
+            <button disabled={!!busy} onClick={doSkipExport} title="Properties in this view with no phone, formatted for skip tracing" style={btn(false)}>{busy==='skip'?'Exporting…':'Export for skip trace'}</button>
           </div>
         </div>
 
@@ -217,6 +264,13 @@ export default function ListStacking({leads,campaigns,reloadLeads,openLead,isMob
 function TypeChip({t}){
   return <span style={{display:'inline-block',background:C.blue+'1a',color:C.blue,border:'1px solid '+C.blue+'44',borderRadius:6,padding:'1px 7px',fontSize:11,fontWeight:600,marginRight:4,marginTop:3,whiteSpace:'nowrap'}}>{t}</span>
 }
+function ScorePill({s,big}){
+  if(s===null || s===undefined) return null
+  const [l,c] = scoreLabel(s)
+  return <div title={'Score '+s+' — '+l} style={{width:big?52:40,height:big?44:34,borderRadius:9,background:c+'22',border:'1px solid '+c,color:c,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',flexShrink:0,lineHeight:1}}>
+    <span style={{fontWeight:800,fontSize:big?18:14}}>{s}</span><span style={{fontSize:8,letterSpacing:.5,marginTop:1}}>{l.toUpperCase()}</span>
+  </div>
+}
 function StackBadge({n,big}){
   const c = STACK_COLOR(n)
   return <div title={'On '+n+' list type'+(n===1?'':'s')} style={{width:big?44:34,height:big?44:34,borderRadius:9,background:c+'22',border:'1px solid '+c,color:c,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',flexShrink:0,lineHeight:1}}>
@@ -233,6 +287,7 @@ function PropRow({p,picked,onPick,open,onOpen,leads,isMobile}){
       <div style={{display:'flex',gap:12,alignItems:'center',padding:'11px 16px'}}>
         <input type="checkbox" checked={picked} onChange={onPick} style={{flexShrink:0}}/>
         <StackBadge n={p.stack}/>
+        <ScorePill s={p.score}/>
         <div onClick={onOpen} style={{flex:1,minWidth:0,cursor:'pointer',display:isMobile?'block':'grid',gridTemplateColumns:'1.3fr 1fr 1.4fr .8fr',gap:12,alignItems:'center'}}>
           <div style={{minWidth:0}}>
             <div style={{fontWeight:600,fontSize:13.5,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.address}</div>
@@ -264,6 +319,7 @@ function Upload({leads,campaigns,isMobile,onDone,card,inp,btn,cap}){
   const [showMap,setShowMap] = useState(false)
   const [status,setStatus] = useState(null)
   const [busy,setBusy] = useState(false)
+  const [overlap,setOverlap] = useState(null)   // share of rows already in your stack
 
   async function pick(e){
     const fl = e.target.files && e.target.files[0]; if(!fl) return
@@ -274,7 +330,8 @@ function Upload({leads,campaigns,isMobile,onDone,card,inp,btn,cap}){
       const m = autoMap(r.headers)
       setParsed(r); setMap(m); setShowMap(!m.address)
       const base = fl.name.replace(/\.csv$/i,'').replace(/[_-]+/g,' ')
-      setName(base); setType(guessType(base))
+      setName(base); setType(guessType(base)); setOverlap(null)
+      if(m.address){ const recs = buildRecords(r.rows, m).records; matchShare(recs).then(setOverlap).catch(()=>{}) }
     }catch(er){ setParsed(null); setStatus({ok:false,t:"Couldn't read that file: "+er.message}) }
   }
   const built = parsed && map.address ? buildRecords(parsed.rows, map) : null
@@ -282,12 +339,20 @@ function Upload({leads,campaigns,isMobile,onDone,card,inp,btn,cap}){
   async function go(){
     if(!built || !built.records.length || !name.trim()) return
     setBusy(true); setStatus({ok:true,t:'Starting…'})
+    if(type===SKIP){
+      try{
+        const r = await appendContacts(built.records, leads, t=>setStatus({ok:true,t}))
+        setStatus({ok:true,done:true,t:'Skip-trace results: matched '+r.matched.toLocaleString()+' properties and added '+r.phonesAdded.toLocaleString()+' new phone numbers'+(r.leadsUpdated?' (also added to '+r.leadsUpdated+' leads)':'')+(r.unmatched?' · '+r.unmatched.toLocaleString()+' rows didn\'t match a property you have':'')+'.'})
+        setParsed(null); setFile(null); onDone()
+      }catch(er){ setStatus({ok:false,t:errText(er)}) }
+      setBusy(false); return
+    }
     try{
       const r = await importList({ records:built.records, name, type, campaign, leads, onProgress:t=>setStatus({ok:true,t}) })
       setStatus({ok:true,done:true,t:'Stacked "'+name.trim()+'": '+r.total.toLocaleString()+' properties — '+r.fresh.toLocaleString()+' new, '+r.stacked.toLocaleString()+' were already on another list'+(r.leadsUpdated?' ('+r.leadsUpdated+' matching leads updated)':'')+'.'})
       setParsed(null); setFile(null)
       onDone()
-    }catch(er){ const m=stackErr(er.message); setStatus({ok:false,t:m==='setup'?'List Stacking tables are missing — run supabase/add-list-stacking.sql in Supabase first.':m}) }
+    }catch(er){ setStatus({ok:false,t:errText(er)}) }
     setBusy(false)
   }
 
@@ -308,9 +373,11 @@ function Upload({leads,campaigns,isMobile,onDone,card,inp,btn,cap}){
       <div style={{marginTop:14}}>
         <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'1.4fr 1fr 1fr',gap:8}}>
           <div><div style={{...cap,marginBottom:4}}>List name</div><input value={name} onChange={e=>setName(e.target.value)} style={{...inp,width:'100%'}}/></div>
-          <div><div style={{...cap,marginBottom:4}}>List type</div><select value={type} onChange={e=>setType(e.target.value)} style={{...inp,width:'100%'}}>{TYPE_NAMES.map(t=><option key={t}>{t}</option>)}</select></div>
+          <div><div style={{...cap,marginBottom:4}}>List type</div><select value={type} onChange={e=>setType(e.target.value)} style={{...inp,width:'100%',borderColor:type===SKIP?C.blue:C.line}}>{TYPE_NAMES.map(t=><option key={t}>{t}</option>)}<option value={SKIP}>Skip-trace results — add phones only</option></select></div>
           <div><div style={{...cap,marginBottom:4}}>Campaign (county)</div><select value={campaign} onChange={e=>setCampaign(e.target.value)} style={{...inp,width:'100%'}}><option value="">None</option>{campaigns.map(c=><option key={c.id} value={String(c.id)}>{c.name}</option>)}</select></div>
         </div>
+        {type===SKIP ? <div style={{marginTop:10,fontSize:12.5,color:C.blue,background:C.blue+'12',border:'1px solid '+C.blue+'44',borderRadius:8,padding:'8px 11px',lineHeight:1.5}}>Phones and emails in this file are added to properties you already have (matched by address). No new properties or lists are created, and new numbers also go onto any matching leads.</div>
+          : overlap!==null && overlap>=0.6 && <div style={{marginTop:10,fontSize:12.5,color:C.cream,background:C.amber+'12',border:'1px solid '+C.amber+'44',borderRadius:8,padding:'8px 11px',lineHeight:1.5}}>{Math.round(overlap*100)}% of these addresses are already in your stack. If this is a skip-trace return, <span onClick={()=>setType(SKIP)} style={{color:C.orange,cursor:'pointer',fontWeight:700}}>just add the phone numbers →</span> Otherwise stacking it as a new list is fine.</div>}
 
         <div style={{marginTop:12,fontSize:12.5,color:C.cream,lineHeight:1.6}}>
           {parsed.rows.length.toLocaleString()} rows found{parsed.skippedTop?<span style={{color:C.muted}}> (skipped {parsed.skippedTop} title line{parsed.skippedTop===1?'':'s'} above the column headers)</span>:''}.{' '}
@@ -340,7 +407,7 @@ function Upload({leads,campaigns,isMobile,onDone,card,inp,btn,cap}){
         </div>}
 
         <button disabled={busy||!built||!built.records.length||!name.trim()} onClick={go} style={{...btn(true),marginTop:12,opacity:(busy||!built||!built.records.length)?0.5:1}}>
-          {busy?'Stacking…':'Stack '+(built?built.records.length.toLocaleString():0)+' properties'}
+          {busy?(type===SKIP?'Adding…':'Stacking…'):type===SKIP?'Add phones from '+(built?built.records.length.toLocaleString():0)+' rows':'Stack '+(built?built.records.length.toLocaleString():0)+' properties'}
         </button>
       </div>}
       {status && <div style={{marginTop:12,fontSize:12.5,color:status.ok?C.green:C.red}}>{status.t}</div>}
@@ -392,6 +459,7 @@ function PropertyDrawer({p,idx,total,onClose,onPrev,onNext,leads,campaigns,openL
 
         <div style={{display:'flex',gap:12,alignItems:'flex-start'}}>
           <StackBadge n={p.stack} big/>
+          <ScorePill s={p.score} big/>
           <div style={{minWidth:0,flex:1}}>
             <div style={{fontFamily:'Georgia,serif',fontSize:22,fontWeight:600,lineHeight:1.2}}>{p.address}</div>
             <div style={{color:C.muted,fontSize:13,marginTop:2}}>{[p.city,p.state].filter(Boolean).join(', ')} {p.zip||''}{p.county?' · '+p.county+' County':''}</div>
@@ -400,6 +468,11 @@ function PropertyDrawer({p,idx,total,onClose,onPrev,onNext,leads,campaigns,openL
           <button onClick={()=>copy(full,'addr')} style={{...btn2(false),padding:'5px 9px',fontSize:11.5}}>{copied==='addr'?'Copied':'Copy address'}</button>
         </div>
 
+        {(()=>{ const sc = scoreProperty(p); if(!sc.why.length) return null
+          return <div style={{background:C.ink,borderRadius:12,padding:'10px 14px',marginTop:12,fontSize:12.5}}>
+            <div style={{color:C.muted,fontSize:10.5,textTransform:'uppercase',letterSpacing:1,marginBottom:5}}>Why it scores {sc.score}</div>
+            <div style={{display:'flex',gap:'4px 14px',flexWrap:'wrap'}}>{sc.why.map(([n,l])=><span key={l} style={{color:n>0?C.cream:C.red}}><b style={{color:n>0?C.green:C.red}}>{n>0?'+':''}{n}</b> {l}</span>)}</div>
+          </div> })()}
         {signals.length>0 && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:12}}>
           {signals.map(([l,c,tip])=><span key={l} title={tip} style={{background:c+'1e',color:c,border:'1px solid '+c+'55',borderRadius:14,padding:'3px 10px',fontSize:11.5,fontWeight:700}}>{l}</span>)}
         </div>}
