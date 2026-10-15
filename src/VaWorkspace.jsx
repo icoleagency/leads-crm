@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { CoachingInbox, EodReport, LiveTeam, EodReview, CoachPanel, SetupNotice } from './VaTools'
 import { fetchReports, fetchNotes, vaToolsErr } from './vaTools'
-import { STAGE, stageOf, scoreOf, gradeLetter, patchLead, callbackOf, callbackState, fmtWhen, fmtTime, money } from './leadModel'
+import { STAGE, stageOf, scoreOf, gradeLetter, patchLead, fmtWhen, fmtTime, money } from './leadModel'
 import { tally, inLastDays, pct, saveCaller, dailySeries, OUTCOME } from './activity'
 import DailyBars from './DailyBars'
-import { saveCampaign, deleteCampaign, saveMember, deleteMember, campaignOf, campaignName, openHandoff } from './team'
+import { buildQueue, whenText, MAX_TRIES } from './callQueue'
+import { saveCampaign, deleteCampaign, saveMember, deleteMember, campaignOf, campaignName } from './team'
 import { CallCard, ScriptPanel, LogCall, HandoffPanel, IntelEditor, PeoplePanel } from './LeadPanels'
 
 const C = {
@@ -13,7 +14,6 @@ const C = {
   green:'#3fd08a', amber:'#f5b942', red:'#e5573f', blue:'#4aa8ff'
 }
 const GRADE_C = { A:C.green, B:C.amber, C:C.orange, D:C.red }
-const CLOSED_STAGES = ['contract','assigned','closed','dead']
 const STATES = ['NJ','FL','DE','PA','Other']
 
 export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloadTeam,reloadLeads,reloadActivity,meId,onMe,isMobile}){
@@ -21,6 +21,7 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
   const [showManage,setShowManage] = useState(false)
   const [showAll,setShowAll] = useState(false)
   const [histFor,setHistFor] = useState('')
+  const [qTab,setQTab] = useState('due')
   const me = team.find(m=>String(m.id)===meId) || null
   const ownerView = meId==='owner' || !me
   const [reports,setReports] = useState([])
@@ -69,20 +70,13 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
   const mine = me ? board.find(b=>b.m.id===me.id) : null
   const rank = me ? board.findIndex(b=>b.m.id===me.id)+1 : 0
 
-  // ---- my queue ----
+  // ---- my queue (smart call list) ----
   const myCamps = me ? (me.campaigns||[]).map(String) : []
-  const lastCall = id => activity.find(a=>a.lead_id===String(id))
-  const callCount = id => activity.filter(a=>a.lead_id===String(id)).length
-  const queue = !me ? [] : leads
-    .filter(l=>myCamps.includes(campaignOf(l)) && !CLOSED_STAGES.includes(stageOf(l,activity)) && !openHandoff(l))
-    .map(l=>{ const cb=callbackOf(l), cs=callbackState(cb), n=callCount(l.id)
-      // 0 = callback due now, 1 = never called, 2 = called before, 3 = callback later
-      const bucket = cs==='overdue'||cs==='today' ? 0 : cs==='later' ? 3 : n===0 ? 1 : 2
-      return { l, s:scoreOf(l), n, last:lastCall(l.id), cb, cs, bucket } })
-    .sort((a,b)=> a.bucket!==b.bucket ? a.bucket-b.bucket
-      : (a.bucket===0||a.bucket===3) ? new Date(a.cb.at)-new Date(b.cb.at) : b.s-a.s)
-  const dueCount = queue.filter(x=>x.bucket===0).length, overdueCount = queue.filter(x=>x.cs==='overdue').length
-  const shown = showAll ? queue : queue.slice(0,25)
+  const Q = me ? buildQueue(leads, activity, myCamps) : { due:[], scheduled:[], doneToday:[], parked:[] }
+  const tabList = Q[qTab] || Q.due
+  const dueCount = Q.due.filter(x=>x.kind==='callback').length, overdueCount = Q.due.filter(x=>x.cs==='overdue').length
+  const shown = showAll ? tabList : tabList.slice(0,25)
+  async function bringBack(l){ try{ await patchLead(l, { queue_reset_at:new Date().toISOString() }); await reloadLeads() }catch{ /* stays parked */ } }
   const myHandoffs = me ? leads.filter(l=>{ const h=l.details&&l.details.handoff; return h && h.by===me.name })
     .sort((a,b)=>{ const ha=a.details.handoff, hb=b.details.handoff; if((ha.status==='open')!==(hb.status==='open')) return ha.status==='open'?-1:1
       return new Date(hb.done_at||hb.at)-new Date(ha.done_at||ha.at) }) : []
@@ -147,35 +141,43 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
         <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'1.6fr 1fr',gap:14,marginTop:14,alignItems:'start'}}>
           <div style={card}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:10,flexWrap:'wrap',marginBottom:6}}>
-              <div style={{fontWeight:700,fontSize:14}}>My call list <span style={{color:C.muted,fontWeight:400,fontSize:12}}>— {queue.length} leads</span></div>
+              <div style={{fontWeight:700,fontSize:14}}>My call list <span style={{color:C.muted,fontWeight:400,fontSize:12}}>— {Q.due.length} to call now</span></div>
               <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
                 {myCamps.length===0 ? <span style={{color:C.amber,fontSize:12}}>No counties assigned yet</span> :
                   myCamps.map(id=><span key={id} style={{background:C.blue+'1e',color:C.blue,border:'1px solid '+C.blue+'55',borderRadius:10,padding:'2px 8px',fontSize:11,fontWeight:700}}>{campaignName(campaigns,id)||'?'}</span>)}
               </div>
             </div>
-            <div style={{color:C.muted,fontSize:11.5,marginBottom:10}}>Callbacks due first, then never-called leads, then by lead grade. Tap a lead to open its Call Card and script.</div>
-            {dueCount>0 && <div style={{background:(overdueCount?C.red:C.amber)+'14',border:'1px solid '+(overdueCount?C.red:C.amber)+'55',borderRadius:10,padding:'9px 12px',marginBottom:10,fontSize:12.5,color:C.cream}}><b style={{color:overdueCount?C.red:C.amber}}>{dueCount} callback{dueCount===1?'':'s'} due today</b>{overdueCount?' · '+overdueCount+' overdue':''} — they're at the top of your list.</div>}
-            {queue.length===0 ? <div style={{color:C.muted,fontSize:13,padding:'8px 0'}}>{myCamps.length?'Nothing to call in your counties right now. Ask for a new list, or check that leads have a campaign set.':'Ask your manager to assign you to a county.'}</div> :
+            <div style={{display:'flex',gap:6,flexWrap:'wrap',margin:'4px 0 8px'}}>
+              {[['due','Call now',Q.due.length,C.orange],['scheduled','Later',Q.scheduled.length,C.blue],['doneToday','Done today',Q.doneToday.length,C.green],['parked','No contact',Q.parked.length,C.muted]].map(([k,l,n,c])=>(
+                <button key={k} onClick={()=>{ setQTab(k); setShowAll(false) }} style={{background:qTab===k?c:'transparent',color:qTab===k?C.ink:C.muted,border:'1px solid '+(qTab===k?c:C.line),borderRadius:14,padding:'4px 11px',fontSize:12,fontWeight:700,cursor:'pointer'}}>{l} · {n}</button>
+              ))}
+            </div>
+            <div style={{color:C.muted,fontSize:11.5,marginBottom:10,lineHeight:1.45}}>{qTab==='due' ? 'Callbacks first, then sellers you\'ve talked to, then new leads and retries by score. No-answers come back on day 1, 2, 4, 7 and 14; after '+MAX_TRIES+' tries with no contact they move to "No contact".'
+              : qTab==='scheduled' ? 'Not due yet — each one comes back on its own on the day shown.' : qTab==='doneToday' ? 'Already called today. They come back on their next scheduled day.' : 'Called '+MAX_TRIES+'+ times with no answer. Bring one back to start its tries over, or re-skip-trace for new numbers.'}</div>
+            {qTab==='due' && dueCount>0 && <div style={{background:(overdueCount?C.red:C.amber)+'14',border:'1px solid '+(overdueCount?C.red:C.amber)+'55',borderRadius:10,padding:'9px 12px',marginBottom:10,fontSize:12.5,color:C.cream}}><b style={{color:overdueCount?C.red:C.amber}}>{dueCount} callback{dueCount===1?'':'s'} due today</b>{overdueCount?' · '+overdueCount+' overdue':''} — they're at the top of your list.</div>}
+            {tabList.length===0 ? <div style={{color:C.muted,fontSize:13,padding:'8px 0'}}>{!myCamps.length ? 'Ask your manager to assign you to a county.' : qTab==='due' ? (Q.scheduled.length||Q.doneToday.length ? 'You\'re caught up — everything else is scheduled for later. Nice work.' : 'Nothing to call in your counties right now. Ask for a new list, or check that leads have a campaign set.') : 'Nothing here.'}</div> :
             <div>
-              <button onClick={()=>{ setWork({ ids:queue.map(x=>x.l.id), i:0 }); window.scrollTo({top:0}) }} style={{width:'100%',background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'11px',fontWeight:800,fontSize:13,cursor:'pointer',marginBottom:8}}>Start working my list →</button>
-              {shown.map(({l,s,n,last,cb,cs})=>{
-                const g = gradeLetter(s), st = stageOf(l,activity)
+              {qTab==='due' && <button onClick={()=>{ setWork({ ids:Q.due.map(x=>x.l.id), i:0 }); window.scrollTo({top:0}) }} style={{width:'100%',background:C.orange,color:C.ink,border:'none',borderRadius:10,padding:'11px',fontWeight:800,fontSize:13,cursor:'pointer',marginBottom:8}}>Start working my list →</button>}
+              {shown.map(x=>{
+                const { l, kind, label, tries, last, cb, cs, score } = x
+                const sc = score>=70?C.red:score>=50?C.orange:score>=30?C.amber:C.muted
+                const tagC = kind==='callback' ? (cs==='overdue'?C.red:cs==='today'?C.amber:C.blue) : kind==='followup' ? C.green : kind==='new' ? C.blue : kind==='parked' ? C.muted : C.amber
                 return (
-                  <div key={l.id} onClick={()=>{ setWork({ ids:queue.map(x=>x.l.id), i:queue.findIndex(x=>x.l.id===l.id) }); window.scrollTo({top:0}) }} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 6px',borderBottom:'1px solid '+C.line,cursor:'pointer'}}>
-                    <span style={{width:26,height:26,borderRadius:7,background:GRADE_C[g]+'22',color:GRADE_C[g],border:'1px solid '+GRADE_C[g],display:'flex',alignItems:'center',justifyContent:'center',fontWeight:800,fontSize:12,flexShrink:0}}>{g}</span>
+                  <div key={l.id} onClick={()=>{ setWork({ ids:tabList.map(y=>y.l.id), i:tabList.findIndex(y=>y.l.id===l.id) }); window.scrollTo({top:0}) }} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 6px',borderBottom:'1px solid '+C.line,cursor:'pointer'}}>
+                    <span title={'Score '+score} style={{minWidth:30,height:26,borderRadius:7,background:sc+'22',color:sc,border:'1px solid '+sc,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:800,fontSize:12,flexShrink:0}}>{score}</span>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontWeight:600,fontSize:13.5}}>{l.name}</div>
                       <div style={{color:C.muted,fontSize:11.5,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{[l.address,l.city].filter(Boolean).join(', ')} · {l.lead_type}</div>
                     </div>
                     <div style={{textAlign:'right',flexShrink:0}}>
-                      {cs ? <div style={{color:cs==='overdue'?C.red:cs==='today'?C.amber:C.blue,fontSize:11,fontWeight:700}}>{cs==='overdue'?'Callback overdue':cs==='today'?'Callback '+fmtTime(cb.at):'Callback '+new Date(cb.at).toLocaleDateString([], {month:'short',day:'numeric'})}</div>
-                        : st!=='new' && <div style={{color:STAGE[st].c,fontSize:11,fontWeight:700}}>{STAGE[st].l}</div>}
-                      <div style={{color:n?C.muted:C.green,fontSize:11}}>{n ? n+' call'+(n===1?'':'s')+(last?' · last '+new Date(last.created_at).toLocaleDateString([], {month:'short',day:'numeric'}):'') : 'never called'}</div>
+                      <div style={{color:tagC,fontSize:11,fontWeight:700}}>{kind==='callback' ? (cs==='today'?'Callback '+fmtTime(cb.at):cs==='overdue'?'Callback overdue':'Callback '+whenText(x.next)) : kind==='done' ? 'Called today' : label}{x.next && kind!=='callback' ? ' · '+whenText(x.next) : ''}</div>
+                      <div style={{color:tries?C.muted:C.green,fontSize:11}}>{tries ? tries+' call'+(tries===1?'':'s')+(last?' · last '+new Date(last.created_at).toLocaleDateString([], {month:'short',day:'numeric'})+' ('+(OUTCOME[last.outcome]?.short||last.outcome)+')':'') : 'never called'}</div>
+                      {kind==='parked' && <button onClick={e=>{ e.stopPropagation(); bringBack(l) }} style={{marginTop:4,background:'transparent',border:'1px solid '+C.orange,color:C.orange,borderRadius:7,padding:'2px 8px',fontSize:11,fontWeight:700,cursor:'pointer'}}>Bring back</button>}
                     </div>
                   </div>
                 )
               })}
-              {queue.length>25 && <button onClick={()=>setShowAll(!showAll)} style={{marginTop:10,background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'7px 12px',fontSize:12,cursor:'pointer'}}>{showAll?'Show fewer':'Show all '+queue.length}</button>}
+              {tabList.length>25 && <button onClick={()=>setShowAll(!showAll)} style={{marginTop:10,background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'7px 12px',fontSize:12,cursor:'pointer'}}>{showAll?'Show fewer':'Show all '+tabList.length}</button>}
             </div>}
           </div>
 

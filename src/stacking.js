@@ -368,7 +368,7 @@ export async function importList({records, name, type, campaign, leads, onProgre
   const saved = []
   let done = 0
   for(const part of chunks(rows, 500)){
-    const { data, error } = await supabase.from('properties').upsert(part, { onConflict:'addr_key' }).select('id,lead_id,list_types')
+    const { data, error } = await supabase.from('properties').upsert(part, { onConflict:'addr_key' }).select('id,lead_id,list_types,score')
     if(error) throw error
     saved.push(...(data||[]))
     done += part.length; onProgress('Stacking… '+done.toLocaleString()+' / '+rows.length.toLocaleString())
@@ -380,7 +380,7 @@ export async function importList({records, name, type, campaign, leads, onProgre
   const toPatch = saved.filter(p=>p.lead_id && leadById.has(String(p.lead_id)))
   let i = 0
   for(const part of chunks(toPatch, 10)){
-    await Promise.all(part.map(p=>patchLead(leadById.get(String(p.lead_id)), { lists:p.list_types, stack:p.list_types.length, property_id:String(p.id) })))
+    await Promise.all(part.map(p=>patchLead(leadById.get(String(p.lead_id)), { lists:p.list_types, stack:p.list_types.length, property_id:String(p.id), ...(p.score!=null?{score:p.score}:{}) })))
     i += part.length; onProgress('Updating matching leads… '+i+' / '+toPatch.length)
   }
   return { total:rows.length, fresh, stacked, leadsUpdated:toPatch.length }
@@ -448,7 +448,7 @@ export async function removeList(id){
 
 // After a list is removed, bring each linked lead's "On N lists" back in line.
 export async function syncLeadStacks(leads){
-  const data = await fetchAllRows(()=>supabase.from('properties').select('id,lead_id,list_types').not('lead_id','is',null).order('id'))
+  const data = await fetchAllRows(()=>supabase.from('properties').select('id,lead_id,list_types,score').not('lead_id','is',null).order('id'))
   const byId = new Map((leads||[]).map(l=>[String(l.id), l]))
   const stale = (data||[]).filter(p=>{ const l=byId.get(String(p.lead_id)); return l && JSON.stringify((l.details||{}).lists||[])!==JSON.stringify(p.list_types) })
   for(const part of chunks(stale, 10))
@@ -477,7 +477,7 @@ export async function sendToLeads(props, {leads, campaign, onProgress=()=>{}}){
         name:p.owner_name||'Unknown owner', address:p.address, city:p.city||'', state:p.state||'NJ',
         lead_type:topType(p.list_types), arv:d.value||0, owed:d.loan||0, phone:(p.phones||[])[0]||'',
         freshness:100, times_contacted:0, motivation:Math.max(30, Math.min(95, p.score ?? (35+stack*15))), skiptraced:(p.phones||[]).length>0,
-        details:{ ...BLANK_DETAILS, repairs:{}, beds:d.beds||'', baths:d.baths||'', sqft:d.sqft||'', year_built:d.year_built||'',
+        details:{ ...BLANK_DETAILS, repairs:{}, ...(p.score!=null?{score:p.score}:{}), beds:d.beds||'', baths:d.baths||'', sqft:d.sqft||'', year_built:d.year_built||'',
           campaign:campaign||p.campaign||'', lists:p.list_types||[], stack, property_id:String(p.id),
           phones:p.phones||[], emails:p.emails||[], mailing:p.mailing||'', zip:p.zip||'', county:p.county||'',
           ...(d.occupancy==='Owner occupied'?{occupancy:'Owner occupied'}:{}),
