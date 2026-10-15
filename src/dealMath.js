@@ -85,6 +85,7 @@ export function lockCheck(r, price){
     return { checks, overall:'red', title:"Don't lock without numbers" }
   }
   price = Number(price)||0
+  if(r.exit==='subto' || r.exit==='sellerfi') return creativeLock(r, price)
   const fee = Number(r.fee)||0, rehab = Number(r.rehab)||0
   const p = { arv, buyerPrice:price+fee, rehab, holdMonths:Number(r.holdMonths)||4, holdMonthly:Number(r.holdMonthly)||1500 }
 
@@ -136,6 +137,25 @@ export function lockCheck(r, price){
 
   const overall = checks.some(c=>c.status==='red') ? 'red' : checks.some(c=>c.status==='amber') ? 'amber' : 'green'
   const title = overall==='green' ? 'Safe to lock at this price' : overall==='amber' ? 'Proceed carefully' : "Don't lock at this price"
+  return { checks, overall, title }
+}
+// Creative deals (subject-to / seller finance) are judged on terms, not the cash max.
+function creativeLock(r, price){
+  const checks = [], add = (key,label,status,text) => checks.push({ key, label, status, text })
+  const m = r.creative || {}, kind = r.exit==='subto' ? 'Subject-to' : 'Seller finance'
+  const conf = r.confidence
+  add('arv','ARV confidence', conf==='High'?'green':conf==='Medium'?'amber':'red', (conf||'Low')+' confidence in the '+money(r.arv)+' ARV.')
+  if(r.exit==='subto') add('debt','Loan numbers', r.debtVerified?'green':'red', r.debtVerified ? 'Verified from a statement.' : 'Not verified — get a mortgage statement. Subject-to lives or dies on the real balance and payment.')
+  else add('debt','Existing debt', !r.payoff ? 'green' : r.payoffCovered ? 'green' : 'amber', !r.payoff ? 'Free & clear.' : r.payoffCovered ? 'Down payment covers the '+money(r.payoff)+' owed.' : 'Seller still owes '+money(r.payoff)+' — only works as a wrap. Have a title company review it.')
+  const cf = Number(m.cashflow)||0
+  add('cashflow','Cash flow', cf>=250?'green':cf>=100?'amber':'red', money(cf)+'/mo after expenses for the creative buyer'+(cf<100?' — most will pass.':'.'))
+  const coc = Number(m.coc)||0
+  add('coc','Cash-on-cash', coc>=0.12?'green':coc>=0.06?'amber':'red', Math.round(coc*100)+'% on a '+money(m.entry)+' entry fee.')
+  const eq = Number(m.equity)||0
+  add('equity','Equity after repairs', eq>=0?'green':eq>=-5000?'amber':'red', (eq<0?'Short ':'')+money(Math.abs(eq))+(eq<0?' — buyer starts upside down.':' of equity on day one.'))
+  if(price && m.price && price>m.price*1.02) add('price','Price vs. your terms','amber',money(price)+' is above the '+money(m.price)+' you underwrote — re-run the numbers at this price.')
+  const overall = checks.some(c=>c.status==='red') ? 'red' : checks.some(c=>c.status==='amber') ? 'amber' : 'green'
+  const title = overall==='green' ? 'Safe to lock — '+kind : overall==='amber' ? 'Proceed carefully — '+kind : "Don't lock on these terms"
   return { checks, overall, title }
 }
 export const LIGHT = { green:'#3fd08a', amber:'#f5b942', red:'#e5573f' }

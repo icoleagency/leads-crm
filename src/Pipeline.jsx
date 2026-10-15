@@ -246,6 +246,8 @@ function Card({r,activity,onMove,onOpen,onDeal,onStep,onNego,onAnalyze,pending})
       <div style={{...small,marginTop:2}}>{[lead.address,lead.city].filter(Boolean).join(', ')||lead.state}</div>
       <div style={{...small,marginTop:1}}>{[lead.lead_type, d.sell_reason!=='Unknown'&&d.sell_reason, d.timeline!=='Unsure'&&d.timeline&&'timeline '+d.timeline.toLowerCase()].filter(Boolean).join(' · ')}</div>
 
+      {d.uw && d.uw.status && <div style={{fontSize:11,marginTop:4,fontWeight:700,color:d.uw.status==='approved'?C.green:d.uw.status==='pass'?C.red:C.amber}}>
+        {d.uw.status==='approved'?'✓ Underwritten':d.uw.status==='pass'?'✕ Underwriting: pass':'… Underwriting: needs info'}{d.uw.exit?' · '+({cash:'Cash',subto:'Subject-to',sellerfi:'Seller finance'})[d.uw.exit]:''}</div>}
       {n && (n.lastYou || n.lastSeller) && <div style={{fontSize:11.5,marginTop:6,display:'flex',gap:6,flexWrap:'wrap'}}>
         {n.lastYou && <span>You <b style={{color:C.orange}}>{money(n.lastYou.amount)}</b></span>}
         {n.lastSeller && <span>· Seller <b>{money(n.lastSeller.amount)}</b></span>}

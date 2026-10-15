@@ -4,6 +4,11 @@ import { REPAIRS, detailsOf, money } from './leadModel'
 import { fetchBuyers, fetchBuyerActivity } from './dispo'
 import { investorStats, allPurchases, yourBuyerHistory, buyerProfit as profitAt } from './dealMath'
 import { LockCard, InvestorCard, StressCard } from './DealSafety'
+import { StepBar, StepNotes, StepNav, DebtStep, CreativeCard, SignOff } from './Underwrite'
+import { BLANK_DEBT, BLANK_CREATIVE, DECISIONS, creative as creativeMath, creativeVerdict, cashNet, payoff } from './creative'
+import { getCaller } from './activity'
+import { floorProfit } from './dealMath'
+const EXIT_NAME = { cash:'Cash (flipper)', subto:'Subject-to', sellerfi:'Seller finance' }
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -158,10 +163,20 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
       set: {...DEFAULT_SET, ...(saved?.set||{})},
       rehab: {...DEFAULT_REHAB, ...(saved?.rehab||{}), rates:{...DEFAULT_REHAB.rates, ...(saved?.rehab?.rates||{})}},
       offer: {...DEFAULT_OFFER, ...(saved?.offer||{})},
+      debt: {...BLANK_DEBT, ...(Number(l&&l.owed)>0 ? { loan:String(l.owed) } : {}), ...(saved?.debt||{})},
+      cre: {...BLANK_CREATIVE, ...(saved?.creative||{})},
+      uw: (l && l.details && l.details.uw) || {},
     }
   }
   const [st,setSt] = useState(()=>init(lead))
-  const { S, comps, set, rehab, offer } = st
+  const { S, comps, set, rehab, offer, debt, cre, uw } = st
+  const setDebt = v => setSt(s=>({...s, debt:v}))
+  const setCre = v => setSt(s=>({...s, cre:v}))
+  const setUw = v => setSt(s=>({...s, uw:v}))
+  const [mode,setMode] = useState('steps')
+  const [step,setStep] = useState(()=> lead && lead.details && lead.details.uw && lead.details.uw.status ? 'decide' : 'property')
+  const go = k => { setStep(k); window.scrollTo({top:0}) }
+  const show = k => mode==='all' || step===k
   const up = (k,v) => setSt(s=>({...s,[k]:v}))
   const [showSet,setShowSet] = useState(false)
   const [paste,setPaste] = useState(null)
@@ -227,7 +242,46 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
     investor: inv.n ? { n:inv.n, scope:inv.scope, label:inv.label, months:inv.months, median:inv.median, p25:inv.p25, p75:inv.p75 } : null }
   const stressP = { arv, buyerPrice:price+num(offer.fee), rehab:rehabTotal, holdMonths:offer.holdMonths, holdMonthly:offer.holdMonthly }
 
-  async function save(){
+  // ---- underwriting: creative exit, step checks, exit recommendation ----
+  const cm = creativeMath(cre, { arv, rehab:rehabTotal, debt })
+  const cv = creativeVerdict(cm)
+  const cn = cashNet(walk, debt)
+  const po = payoff(debt)
+  const cashProfit = arv ? profitAt({ arv, buyerPrice:walk+num(offer.fee), rehab:rehabTotal, holdMonths:offer.holdMonths, holdMonthly:offer.holdMonthly }) : 0
+  const cashS = !arv ? 'amber' : cn.net<0 ? 'red' : (!cn.works || cashProfit<floorProfit(arv)) ? 'amber' : 'green'
+  const cashLine = !arv ? 'Needs an ARV' : cn.net<0 ? 'Payoff ('+money(po.total)+') is above your cash max — a cash deal can\'t close.' : 'Offer up to '+money(walk)+' · seller nets '+money(cn.net)+' · your fee '+money(num(offer.fee))
+  const exits = [
+    { k:'cash', label:'Cash (flipper)', line:cashLine, s:cashS, verdict: cashS==='green'?'Works as a cash deal':cashS==='amber'?'Works, but tight':'Doesn\'t work for cash' },
+    { k:cm.kind, label:EXIT_NAME[cm.kind], line:'Buyer\'s entry '+money(cm.entry)+' · '+(cm.cashflow<0?'−':'')+money(Math.abs(cm.cashflow))+'/mo · equity '+(cm.equity<0?'−':'')+money(Math.abs(cm.equity)), s:cv.s, verdict:cv.t },
+  ]
+  const isCre = uw.exit==='subto' || uw.exit==='sellerfi'
+  if(isCre){ R.exit = uw.exit; R.creative = { kind:cm.kind, price:Math.round(cm.price), entry:Math.round(cm.entry), cashflow:Math.round(cm.cashflow), coc:cm.coc, equity:Math.round(cm.equity) }
+    R.debtVerified = !!(debt.verified || debt.free); R.payoff = Math.round(po.total); R.payoffCovered = cm.kind==='sellerfi' ? !cm.downShort : true }
+  const notes = {
+    property: [ !num(S.sqft) && ['red','Add the square footage — comps and rehab both need it.'], (!has(S.beds)||S.beds==='') && ['amber','Add beds and baths so comps adjust correctly.'],
+      !S.zip && !d.zip && ['amber','Add the zip so the investor price check knows where to look.'], num(S.sqft) && has(S.beds) && S.beds!=='' && ['green','Property facts are in.'] ].filter(Boolean),
+    arv: [ !A.n && ['red','Add at least 3 sold comps (upload a Redfin CSV or paste listings).'], A.n>0 && A.n<3 && ['amber','Only '+A.n+' comp'+(A.n===1?'':'s')+' — add more for a reliable ARV.'],
+      A.conf && A.conf.l!=='High' && A.why.length>0 && ['amber','Confidence is '+A.conf.l+': '+A.why.join(', ')+'.'], A.conf && A.conf.l==='High' && ['green','ARV '+money(arv)+' with high confidence.'] ].filter(Boolean),
+    rehab: [ !rehabTotal && ['red','No rehab number yet.'], rehabTotal>0 && rehab.mode==='level' && ['amber','This is a $/sqft estimate — itemize from the Call Card or a walkthrough when you can.'],
+      num(rehab.contingency)<10 && ['amber','Contingency under 10% — surprises happen.'], rehabTotal>0 && rehab.mode==='items' && ['green','Itemized rehab: '+money(rehabTotal)+'.'] ].filter(Boolean),
+    debt: [ !debt.free && !num(debt.loan) && !debt.verified && ['amber','Enter the mortgage balance — or tick Free & clear.'], !debt.verified && !debt.free && num(debt.loan)>0 && ['amber','Seller\'s numbers only — verify with a mortgage statement before you lock.'],
+      arv>0 && cn.net<0 && ['red','They owe more than your cash max — a cash offer can\'t close. Subject-to may still work.'], (debt.verified||debt.free) && ['green','Debt verified.'] ].filter(Boolean),
+    exit: [ ['cash'===exits[0].k && exits[0].s, 'Cash: '+exits[0].verdict+' — '+exits[0].line], [cv.s, EXIT_NAME[cm.kind]+': '+cv.t+(cm.missing.length?'':' — entry '+money(cm.entry)+', '+(cm.cashflow<0?'−':'')+money(Math.abs(cm.cashflow))+'/mo')],
+      cashS==='red' && cv.s!=='red' && ['green','Go creative on this one — the cash numbers don\'t close but the terms do.'],
+      cashS==='green' && cv.s==='green' && ['green','Both work — offer cash first, keep subject-to/seller finance as plan B if they won\'t take your number.'] ].filter(Boolean),
+  }
+  const stepStatus = {
+    property: num(S.sqft) && has(S.beds) && S.beds!=='' ? 'done' : (num(S.sqft)||S.beds) ? 'warn' : undefined,
+    arv: arv ? (A.conf && A.conf.l==='Low' ? 'warn' : 'done') : undefined,
+    rehab: rehabTotal ? 'done' : undefined,
+    debt: (debt.verified||debt.free) ? 'done' : num(debt.loan) ? 'warn' : undefined,
+    exit: uw.exit ? 'done' : undefined,
+    decide: uw.status && uw.at ? 'done' : undefined,
+  }
+  const uwDec = DECISIONS.find(x=>x[0]===uw.status)
+  const uwLabel = uwDec ? uwDec[1].split(' —')[0] : '', uwCol = uwDec ? uwDec[2] : C.muted
+
+  async function save(withDecision){
     if(!lead) return
     setSaving(true); setMsg(null)
     try{
@@ -238,12 +292,14 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
         baths:has(S.baths)&&S.baths!==''?num(S.baths):(lead.details||{}).baths??null,
         sqft:has(S.sqft)&&S.sqft!==''?num(S.sqft):(lead.details||{}).sqft??null,
         year_built:has(S.year)&&S.year!==''?num(S.year):(lead.details||{}).year_built??null,
-        comp:{ subject:S, comps, set, rehab, offer, result } }
+        comp:{ subject:S, comps, set, rehab, offer, debt, creative:cre, result },
+        ...(withDecision && uw.exit && uw.status ? { uw:{ ...uw, by:getCaller()||null, at:new Date().toISOString(), numbers: uw.exit==='cash' ? { walk, fee:num(offer.fee) } : R.creative } } : {}) }
       const { error } = await supabase.from('leads').update({ arv, details }).eq('id',lead.id)
       if(error) throw error
-      setMsg({ok:true,t:'Saved to '+lead.name+'. Their Call Card and script now use this ARV and offer range.'})
+      if(withDecision && uw.exit && uw.status) setUw({ ...uw, at:new Date().toISOString() })
+      setMsg({ok:true,save:true,t:withDecision ? 'Underwriting saved to '+lead.name+': '+uwLabel+' · '+EXIT_NAME[uw.exit]+'.' : 'Saved to '+lead.name+'. Their Call Card and script now use this ARV and offer range.'})
       reload()
-    }catch(e){ setMsg({ok:false,t:/fetch/i.test(e.message)?"Can't reach the database — try again in a minute.":e.message}) }
+    }catch(e){ setMsg({ok:false,save:true,t:/fetch/i.test(e.message)?"Can't reach the database — try again in a minute.":e.message}) }
     setSaving(false)
   }
 
@@ -266,7 +322,15 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
         </select>
       </div>
 
-      {/* Subject */}
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',marginTop:14}}>
+        <div style={{display:'flex',gap:6}}>
+          {[['steps','Step-by-step underwriting'],['all','Everything on one page']].map(([k,l])=><button key={k} onClick={()=>setMode(k)} style={{...btn(mode===k),padding:'6px 12px',fontSize:12}}>{l}</button>)}
+        </div>
+        {uw.status && <span style={{fontSize:12.5,color:uwCol,fontWeight:700}}>Underwriting: {uwLabel}{uw.exit?' · '+EXIT_NAME[uw.exit]:''}</span>}
+      </div>
+      {mode==='steps' && <StepBar step={step} setStep={go} status={stepStatus} isMobile={isMobile}/>}
+
+      {show('property') && <>
       <div style={{...card,marginTop:18}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:10,flexWrap:'wrap',marginBottom:12}}>
           <div style={{fontWeight:700,fontSize:14}}>Subject property <span style={{color:C.muted,fontWeight:400,fontSize:12}}>{lead ? '— '+[lead.address,lead.city,lead.state].filter(Boolean).join(', ') : '— enter the details'}</span></div>
@@ -278,8 +342,10 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
           ))}
         </div>
       </div>
+        {mode==='steps' && <><StepNotes items={notes.property}/><StepNav next={()=>go('arv')}/></>}
+      </>}
 
-      {/* Comps */}
+      {show('arv') && <>
       <div style={{...card,marginTop:14}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:10}}>
           <div style={{fontWeight:700,fontSize:14}}>Sold comps <span style={{color:C.muted,fontWeight:400,fontSize:12}}>— {A.n} used{A.medPpsf?' · median $'+Math.round(A.medPpsf)+'/sqft':''}</span></div>
@@ -303,7 +369,7 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
           </div>
         </div>}
 
-        {msg && <div style={{marginBottom:10,fontSize:12.5,lineHeight:1.45,color:msg.ok?C.green:C.amber,background:(msg.ok?C.green:C.amber)+'14',border:'1px solid '+(msg.ok?C.green:C.amber)+'44',borderRadius:8,padding:'8px 11px'}}>{msg.t}</div>}
+        {msg && !msg.save && <div style={{marginBottom:10,fontSize:12.5,lineHeight:1.45,color:msg.ok?C.green:C.amber,background:(msg.ok?C.green:C.amber)+'14',border:'1px solid '+(msg.ok?C.green:C.amber)+'44',borderRadius:8,padding:'8px 11px'}}>{msg.t}</div>}
 
         {comps.length===0 ? <div style={{color:C.muted,fontSize:13,padding:'14px 0'}}>No comps yet. Aim for 3–6 sold homes within about a mile, sold in the last 6 months, similar size.</div> :
         <div style={{overflowX:'auto'}}>
@@ -354,9 +420,7 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
           <div style={{gridColumn:'1/-1',color:C.muted,fontSize:11.5,lineHeight:1.5}}>Each comp is adjusted <i>to your subject</i>: bigger subject = comp adjusted up. Comps sold in worse condition are adjusted up toward renovated, because ARV is the <i>after-repair</i> value. Older sales are trended forward at the market rate.</div>
         </div>}
       </div>
-
-      {/* Results */}
-      <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'1fr 1fr 1fr',gap:14,marginTop:14,alignItems:'start'}}>
+        <div style={{marginTop:14}}>
         <div style={card}>
           <div style={cap}>After-repair value</div>
           <div style={{fontFamily:'Georgia,serif',fontSize:34,fontWeight:800,color:arv?C.cream:C.muted,marginTop:4}}>{arv?money(arv):'—'}</div>
@@ -371,7 +435,12 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
             {A.cross>0 && Math.abs(A.cross-arv)/arv>0.1 && <div style={{color:C.amber,fontSize:11.5,lineHeight:1.4,marginTop:4}}>The $/sqft check is over 10% off the adjusted ARV — look at comp sizes and conditions.</div>}
           </div>}
         </div>
+        </div>
+        {mode==='steps' && <><StepNotes items={notes.arv}/><StepNav prev={()=>go('property')} next={()=>go('rehab')}/></>}
+      </>}
 
+      {show('rehab') && <>
+        <div style={{marginTop:14}}>
         <div style={card}>
           <div style={cap}>Rehab estimate</div>
           <div style={{fontFamily:'Georgia,serif',fontSize:34,fontWeight:800,color:C.cream,marginTop:4}}>{money(rehabTotal)}</div>
@@ -410,7 +479,21 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
             <input type="number" value={rehab.contingency} onChange={e=>up('rehab',{...rehab,contingency:num(e.target.value)})} style={{...inp,width:56,padding:'4px 6px'}}/>%
           </label>
         </div>
+        </div>
+        {mode==='steps' && <><StepNotes items={notes.rehab}/><StepNav prev={()=>go('arv')} next={()=>go('debt')}/></>}
+      </>}
 
+      {show('debt') && <>
+        <DebtStep debt={debt} setDebt={setDebt} walk={walk} isMobile={isMobile}/>
+        {mode==='steps' && <><StepNotes items={notes.debt}/><StepNav prev={()=>go('rehab')} next={()=>go('exit')}/></>}
+      </>}
+
+      {show('exit') && <>
+        {arv>0 && <div style={{...card,marginTop:14,padding:'12px 16px'}}>
+          <div style={{fontWeight:700,fontSize:13.5,marginBottom:4}}>Which exit works?</div>
+          <StepNotes items={notes.exit}/>
+        </div>}
+        <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'1fr 1.5fr',gap:14,marginTop:14,alignItems:'start'}}>
         <div style={{...card,borderColor:C.orange+'77'}}>
           <div style={cap}>Offer ladder</div>
           {arv>0 ? <div style={{marginTop:8}}>
@@ -427,8 +510,8 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
             <label style={{color:C.muted,fontSize:11}}>Your fee $<input type="number" value={offer.fee} onChange={e=>up('offer',{...offer,fee:num(e.target.value)})} style={{...inp,marginTop:3}}/></label>
           </div>
         </div>
-      </div>
-
+          <CreativeCard c={cre} setC={setCre} m={cm} verdict={cv} isMobile={isMobile}/>
+        </div>
       {arv>0 &&
       <div style={{...card,marginTop:14}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:10}}>
@@ -449,15 +532,22 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
           <span>Flippers typically want $25k+ or 10%+ of ARV. If this says thin, your walk-away is too high for a flip buyer.</span>
         </div>
       </div>}
-
-      {arv>0 && <LockCard r={R} price={testPrice} setPrice={setTestPrice} contract={num(d.deal&&d.deal.contract_price)} isMobile={isMobile}/>}
       {arv>0 && <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'1.15fr 1fr',gap:14,marginTop:14,alignItems:'start'}}>
         <InvestorCard stats={inv} history={hist} buyerPrice={price+num(offer.fee)} months={months} setMonths={setMonths} hasData={purchases.length>0}/>
         <StressCard p={stressP}/>
       </div>}
+        {mode==='steps' && <StepNav prev={()=>go('debt')} next={()=>go('decide')}/>}
+      </>}
 
+      {show('decide') && <>
+        {arv>0 && <LockCard r={R} price={testPrice} setPrice={setTestPrice} contract={num(d.deal&&d.deal.contract_price)} isMobile={isMobile}/>}
+        <SignOff uw={uw} setUw={setUw} exits={exits} lead={lead} onSave={()=>save(true)} saving={saving} isMobile={isMobile}/>
+        {mode==='steps' && <StepNav prev={()=>go('exit')}/>}
+      </>}
+
+      {msg && msg.save && <div style={{marginTop:14,fontSize:12.5,lineHeight:1.45,color:msg.ok?C.green:C.red,background:(msg.ok?C.green:C.red)+'14',border:'1px solid '+(msg.ok?C.green:C.red)+'44',borderRadius:8,padding:'9px 12px'}}>{msg.t}</div>}
       <div style={{display:'flex',gap:10,alignItems:'center',marginTop:16,flexWrap:'wrap'}}>
-        <button onClick={save} disabled={!lead||!arv||saving} style={{...btn(true),padding:'12px 22px',fontSize:13,opacity:(!lead||!arv||saving)?0.5:1,cursor:(!lead||!arv)?'default':'pointer'}}>{saving?'Saving...':'Save analysis to lead'}</button>
+        <button onClick={()=>save(false)} disabled={!lead||!arv||saving} style={{...btn(true),padding:'12px 22px',fontSize:13,opacity:(!lead||!arv||saving)?0.5:1,cursor:(!lead||!arv)?'default':'pointer'}}>{saving?'Saving...':'Save progress to lead'}</button>
         <span style={{color:C.muted,fontSize:12}}>{!lead?'Pick a lead at the top to save this analysis.':!arv?'Add comps to get an ARV first.':'Updates the lead\'s ARV, Call Card, script offer — and the lock check the Pipeline runs before Under contract.'}</span>
       </div>
     </div>

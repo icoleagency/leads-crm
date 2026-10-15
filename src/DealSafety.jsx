@@ -42,11 +42,11 @@ export function LockCard({r, price, setPrice, contract, isMobile}){
           <div style={{color:C.muted,fontSize:12,marginTop:2}}>Run this before you sign. The same check pops up when a deal moves to Under contract.</div>
         </div>
         <label style={{color:C.muted,fontSize:11.5,width:isMobile?'100%':230}}>Price you'd sign with the seller
-          <input value={price} onChange={e=>setPrice(e.target.value)} inputMode="numeric" placeholder={r.walk?String(r.walk):''} style={{...inp,marginTop:4,fontSize:15,fontWeight:700}}/>
+          <input value={price} onChange={e=>setPrice(e.target.value)} inputMode="numeric" placeholder={r.exit ? String((r.creative&&r.creative.price)||'') : r.walk?String(r.walk):''} style={{...inp,marginTop:4,fontSize:15,fontWeight:700}}/>
         </label>
       </div>
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
-        {[['Opening',r.open],['Target',r.target],['Walk-away',r.walk],...(contract?[['Contract',contract]]:[])].filter(x=>x[1]>0).map(([l,v])=>(
+        {(r.exit ? [['Your '+(r.exit==='subto'?'subject-to':'seller-finance')+' price',r.creative&&r.creative.price]] : [['Opening',r.open],['Target',r.target],['Walk-away',r.walk]]).concat(contract?[['Contract',contract]]:[]).filter(x=>x[1]>0).map(([l,v])=>(
           <button key={l} onClick={()=>setPrice(String(v))} style={{background:num(price)===v?C.orange:'transparent',color:num(price)===v?C.ink:C.muted,border:'1px solid '+(num(price)===v?C.orange:C.line),borderRadius:14,padding:'4px 10px',fontSize:11.5,fontWeight:600,cursor:'pointer'}}>{l} {money(v)}</button>
         ))}
       </div>
