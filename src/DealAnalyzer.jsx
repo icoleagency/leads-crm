@@ -7,6 +7,7 @@ import { LockCard, InvestorCard, StressCard } from './DealSafety'
 import { StepBar, StepNotes, StepNav, DebtStep, CreativeCard, SignOff } from './Underwrite'
 import { BLANK_DEBT, BLANK_CREATIVE, DECISIONS, creative as creativeMath, creativeVerdict, cashNet, payoff } from './creative'
 import { getCaller } from './activity'
+import { parsePaste } from './listingParse'
 import { floorProfit } from './dealMath'
 const EXIT_NAME = { cash:'Cash (flipper)', subto:'Subject-to', sellerfi:'Seller finance' }
 
@@ -86,24 +87,6 @@ function importCSV(text){
     out.push({ id:newId(), address:addr, soldDate:sold, price, sqft:num(g(ix.sqft))||'', beds:g(ix.beds), baths:g(ix.baths), year:g(ix.year), cond:'', on:true })
   }
   return { comps:out, skipped }
-}
-
-// ---------- Zillow / Redfin listing text paste ----------
-function parseListing(text){
-  const t = text.replace(/\u00a0/g,' ')
-  const m = re => { const x=t.match(re); return x ? x[1] : '' }
-  let price = m(/(?:sold for|sold price|last sold (?:for|price)?|sale price)[:\s]*\$\s?([\d,]+)/i)
-  if(!price){ const all=[...t.matchAll(/\$\s?([\d,]{5,})/g)].map(x=>num(x[1])).filter(n=>n>=20000); if(all.length) price=String(all[0]) }
-  const sold = m(/sold(?: on)?[:\s]+([A-Za-z]{3,9}\.? \d{1,2},? \d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})/i)
-  const addr = (t.match(/\d+[^,\n$]{2,60},\s*[A-Za-z .'-]{2,40},\s*[A-Z]{2}\s*\d{5}/)||[''])[0]
-  return {
-    id:newId(), address:addr.trim(), price:num(price)||'',
-    beds:m(/(\d+(?:\.\d+)?)\s*(?:bd|bds|beds?|bedrooms?)\b/i),
-    baths:m(/(\d+(?:\.\d+)?)\s*(?:ba|baths?|bathrooms?)\b/i),
-    sqft:num(m(/([\d,]{3,6})\s*(?:sq\.?\s*ft|sqft|square feet)/i))||'',
-    year:m(/(?:built in|year built:?)\s*(\d{4})/i),
-    soldDate:toISODate(sold.replace(/\.$/,'')), cond:'', on:true,
-  }
 }
 
 // ---------- the math ----------
@@ -203,10 +186,11 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
     else { addComps(r.comps); setMsg({ok:true,t:'Imported '+r.comps.length+' sold comp'+(r.comps.length===1?'':'s')+(r.skipped?' · skipped '+r.skipped+' rows with no sale date/price':'')+'. Now set each comp\'s condition.'}) }
   }
   function addPaste(){
-    const c = parseListing(paste||'')
-    addComps([c]); setPaste(null)
-    const miss = [!c.address&&'address',!c.price&&'price',!c.sqft&&'sqft',!c.soldDate&&'sold date'].filter(Boolean)
-    setMsg(miss.length ? {ok:false,t:'Added — but couldn\'t find '+miss.join(', ')+'. Fill those in on the new row.'} : {ok:true,t:'Comp added from pasted listing. Set its condition.'})
+    const r = parsePaste(paste||'')
+    if(r.kind==='empty'){ setMsg({ok:false,t:'Couldn\'t find a listing in that text. Open the sold home on Zillow or Redfin, press Ctrl+A (⌘A on a Mac) to select the whole page, copy it, and paste it here.'}); return }
+    addComps(r.comps); setPaste(null)
+    if(r.kind==='links') setMsg({ok:false,t:'Added '+r.comps.length+' comp'+(r.comps.length===1?'':'s')+' with the address from each link. Zillow and Redfin don\'t let other sites open their pages, so type in the sold price, sqft and sold date from the listing — or paste the page text instead of the link (it fills everything).'})
+    else setMsg(r.missing.length ? {ok:false,t:'Added — but couldn\'t find '+r.missing.join(', ')+'. Fill those in on the new row.'} : {ok:true,t:'Comp added from the pasted listing. Set its condition.'})
   }
 
   const A = analyze(S, comps, set)
@@ -357,12 +341,12 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
           </div>
         </div>
         <div style={{color:C.muted,fontSize:11.5,lineHeight:1.5,marginBottom:10}}>
-          Redfin: search the area → filter <b style={{color:C.cream}}>Sold, last 6 months</b> → list view → <b style={{color:C.cream}}>Download All</b> at the bottom. Zillow: open a sold home, select all the page text, copy, and paste it here.
+          Redfin: search the area → filter <b style={{color:C.cream}}>Sold, last 6 months</b> → list view → <b style={{color:C.cream}}>Download All</b> at the bottom. Zillow: open a sold home, press <b style={{color:C.cream}}>Ctrl+A</b> (⌘A on Mac) to select the whole page, copy, and paste it here — one listing at a time. Pasting links only fills the address.
         </div>
 
         {paste!==null &&
         <div style={{marginBottom:12}}>
-          <textarea autoFocus value={paste} onChange={e=>setPaste(e.target.value)} rows={4} placeholder="Paste the text of a sold listing here..." style={{...inp,fontSize:13,resize:'vertical',fontFamily:'inherit'}}/>
+          <textarea autoFocus value={paste} onChange={e=>setPaste(e.target.value)} rows={4} placeholder="Paste the whole page text of ONE sold listing (Ctrl+A, Ctrl+C on the listing page). Links work too, but only fill in the address." style={{...inp,fontSize:13,resize:'vertical',fontFamily:'inherit'}}/>
           <div style={{display:'flex',gap:6,marginTop:6}}>
             <button onClick={addPaste} disabled={!paste.trim()} style={btn(true)}>Add comp</button>
             <button onClick={()=>setPaste(null)} style={btn(false)}>Cancel</button>
