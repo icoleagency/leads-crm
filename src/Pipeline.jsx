@@ -1,6 +1,8 @@
 import { useState, useMemo } from 'react'
 import { STAGES, STAGE, STALE_DAYS, stageOf, stageSince, daysSince, compResult, detailsOf, moveStage, patchLead, money } from './leadModel'
 import { nextStepOf, urgency, negoOf, offerPlan, NEEDS_STEP, checklistOf, lostStats, reasonLabel } from './deals'
+import { LockGate } from './DealSafety'
+import { getCaller } from './activity'
 import { Modal, NextStepEditor, NegotiationEditor, NextStepChip, FollowUpPlan, ClosingChecklist, LostForm } from './DealTools'
 
 const C = {
@@ -35,6 +37,7 @@ export default function Pipeline({leads,activity,reload,openLead,analyze,isMobil
   const [showNew,setShowNew] = useState(false)
   const [dealFor,setDeal] = useState(null)     // lead id for the deal modal
   const [lostFor,setLostFor] = useState(null)  // {id, stage} when moving to dead / nurture
+  const [lockFor,setLockFor] = useState(null)  // lead id for the lock check before Under contract
   const [stepFor,setStepFor] = useState(null)  // lead id for the next-step modal
   const [negoFor,setNegoFor] = useState(null)  // lead id for the negotiation modal
   const [err,setErr] = useState('')
@@ -74,20 +77,22 @@ export default function Pipeline({leads,activity,reload,openLead,analyze,isMobil
   const inStage = k => shown.filter(r=>r.s===k)
     .sort((a,b)=>urgency(a.ns)-urgency(b.ns) || String(a.ns&&a.ns.due||'9').localeCompare(String(b.ns&&b.ns.due||'9')) || new Date(a.since||0)-new Date(b.since||0))
 
-  async function move(lead, stage){
+  async function move(lead, stage, opts={}){
     const was = local[lead.id]||stageOf(lead,activity)
     if(was===stage) return
+    // Going under contract? Run the lock check first (price vs. max, comps, rehab, investor prices, stress).
+    if(stage==='contract' && !opts.locked && !['assigned','closed'].includes(was)){ setLockFor(lead.id); return }
     if(stage==='dead' || stage==='nurture'){ setLostFor({ id:lead.id, stage, from:was }); return }
     setLocal(m=>({...m,[lead.id]:stage})); setErr('')
     let ok = true
     try{
-      await moveStage(lead, stage)
+      await moveStage(lead, stage, opts.extra||{})
       await reload()
     }catch(e){ ok = false; setErr(/fetch/i.test(e.message)?"Couldn't save that move — the database isn't reachable. Try again in a minute.":e.message) }
     setLocal(m=>{ const n={...m}; delete n[lead.id]; return n })
     if(!ok) return
     // Ask for what happens next, right when it's fresh.
-    if(stage==='contract' && !dealOf(lead).contract_price) setDeal(lead.id)
+    if(stage==='contract') setDeal(lead.id)
     else if(stage==='offer' && !negoOf(lead,activity).lastYou) setNegoFor(lead.id)
     else if(['contacted','appointment','contract','assigned'].includes(stage) && !(lead.details&&lead.details.next)) setStepFor(lead.id)
   }
@@ -201,6 +206,11 @@ export default function Pipeline({leads,activity,reload,openLead,analyze,isMobil
       {filtering && <div style={{color:C.muted,fontSize:12,marginTop:4}}>Showing {shown.filter(r=>showNew||r.s!=='new').filter(r=>showDead||r.s!=='dead').length} matching</div>}
 
       {dealLead && <DealModal lead={dealLead} onClose={()=>setDeal(null)} onSaved={async()=>{ setDeal(null); await reload() }} onChecklist={reload}/>}
+      {lockFor!==null && byId(lockFor) && <LockGate lead={byId(lockFor)} onCancel={()=>setLockFor(null)} onAnalyze={()=>{ const id = lockFor; setLockFor(null); analyze(id) }}
+        onConfirm={async (price, why, res)=>{ const l = byId(lockFor); setLockFor(null)
+          const deal = { ...dealOf(l), contract_price:price, contract_date:dealOf(l).contract_date||new Date().toISOString().slice(0,10),
+            lock:{ status:res.overall, walk:(l.details&&l.details.comp&&l.details.comp.result&&l.details.comp.result.walk)||null, override:why, by:getCaller()||null, at:new Date().toISOString() } }
+          await move(l, 'contract', { locked:true, extra:{ deal } }) }}/>}
       {lostLead && <Modal title={lostFor.stage==='nurture'?'Move to Nurture':'Mark dead'} sub={lostLead.name+' · was '+STAGE[lostFor.from].l} onClose={()=>setLostFor(null)}>
         <LostForm lead={lostLead} stage={lostFor.from} target={lostFor.stage} onCancel={()=>setLostFor(null)} onDone={async()=>{ setLostFor(null); await reload() }}/>
       </Modal>}
@@ -248,6 +258,8 @@ function Card({r,activity,onMove,onOpen,onDeal,onStep,onNego,onAnalyze,pending})
       {isDeal &&
       <div style={{background:C.ink,borderRadius:8,padding:'7px 9px',marginTop:7,fontSize:11.5,lineHeight:1.55}}>
         {dl.contract_price ? <div>Contract {money(dl.contract_price)}{dl.fee?<span style={{color:C.green}}> · fee {money(dl.fee)}</span>:''}</div> : <div style={{color:C.amber}}>No contract details yet</div>}
+        {(()=>{ const w = d.comp && d.comp.result && d.comp.result.walk; const over = dl.contract_price && w && dl.contract_price>w
+          return over ? <div style={{color:C.red,fontWeight:600}} title={dl.lock&&dl.lock.override?'Reason: '+dl.lock.override:''}>⚠ {money(dl.contract_price-w)} over your max{dl.lock&&dl.lock.override?' (overridden)':''}</div> : null })()}
         {dl.buyer && <div style={{color:C.muted}}>Buyer: {dl.buyer}</div>}
         {stage!=='closed' && ci!==null && <div style={{color:ci<0?C.red:ci<=7?C.amber:C.cream,fontWeight:600}}>{ci<0?'Closing overdue by '+(-ci)+'d':ci===0?'Closes today':'Closes '+fmtDate(dl.closing_date)+' ('+ci+'d)'}</div>}
         {stage==='closed' && dl.closing_date && <div style={{color:C.muted}}>Closed {fmtDate(dl.closing_date)}</div>}

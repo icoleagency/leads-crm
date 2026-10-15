@@ -1,6 +1,9 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { supabase } from './supabaseClient'
 import { REPAIRS, detailsOf, money } from './leadModel'
+import { fetchBuyers, fetchBuyerActivity } from './dispo'
+import { investorStats, allPurchases, yourBuyerHistory, buyerProfit as profitAt } from './dealMath'
+import { LockCard, InvestorCard, StressCard } from './DealSafety'
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -150,7 +153,7 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
   const init = l => {
     const d = detailsOf(l||{}); const saved = l && l.details && l.details.comp
     return {
-      S: saved?.subject || { beds:d.beds, baths:d.baths, sqft:d.sqft, year:d.year_built },
+      S: { zip:d.zip||'', ...(saved?.subject || { beds:d.beds, baths:d.baths, sqft:d.sqft, year:d.year_built }) },
       comps: saved?.comps || [],
       set: {...DEFAULT_SET, ...(saved?.set||{})},
       rehab: {...DEFAULT_REHAB, ...(saved?.rehab||{}), rates:{...DEFAULT_REHAB.rates, ...(saved?.rehab?.rates||{})}},
@@ -165,8 +168,15 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
   const [msg,setMsg] = useState(null)
   const [saving,setSaving] = useState(false)
   const fileRef = useRef(null)
+  // Investor purchases (verified cash buyers) + your buyers' offers, for the price check.
+  const [market,setMarket] = useState({ buyers:[], bact:[] })
+  const [months,setMonths] = useState(12)
+  const [testPrice,setTestPrice] = useState(()=>{ const c = lead && lead.details && lead.details.deal && lead.details.deal.contract_price; return c ? String(c) : '' })
+  useEffect(()=>{ let live = true
+    Promise.all([fetchBuyers().catch(()=>[]), fetchBuyerActivity().catch(()=>[])]).then(([b,a])=>{ if(live) setMarket({ buyers:b||[], bact:a||[] }) })
+    return ()=>{ live = false } },[])
 
-  function pickLead(id){ setLeadId(id); setSt(init(leads.find(l=>String(l.id)===id))); setMsg(null) }
+  function pickLead(id){ const l = leads.find(x=>String(x.id)===id); setLeadId(id); setSt(init(l)); setMsg(null); const c = l && l.details && l.details.deal && l.details.deal.contract_price; setTestPrice(c?String(c):'') }
   const setC = (id,k,v) => up('comps', comps.map(c=>c.id===id?{...c,[k]:v}:c))
   const addComps = list => up('comps', [...comps, ...list])
 
@@ -205,12 +215,24 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
   const verdict = !arv ? null : bProfit>=Math.max(25000,arv*0.10) ? {t:'Buyer-friendly',c:C.green} : bProfit>=arv*0.05 ? {t:'Thin for a flipper',c:C.amber} : {t:"Won't sell to a flipper",c:C.red}
   const ask = num(d.asking_price)
 
+  // ---- safety checks ----
+  const purchases = allPurchases(market.buyers)
+  const subjectLoc = { id:lead&&lead.id, zip:S.zip||d.zip, city:lead&&lead.city, county:d.county }
+  const inv = investorStats(subjectLoc, purchases, { months })
+  const hist = lead ? yourBuyerHistory(subjectLoc, leads, market.bact) : null
+  const price = num(testPrice) || walk
+  const rehabItemized = rehab.mode==='items' && flagged.length>0
+  const R = { arv, rehab:rehabTotal, walk, target, open, fee:num(offer.fee), holdMonths:offer.holdMonths, holdMonthly:offer.holdMonthly,
+    confidence:A.conf?.l||null, comps:A.n, rehabItemized, updated_at:new Date().toISOString(),
+    investor: inv.n ? { n:inv.n, scope:inv.scope, label:inv.label, months:inv.months, median:inv.median, p25:inv.p25, p75:inv.p75 } : null }
+  const stressP = { arv, buyerPrice:price+num(offer.fee), rehab:rehabTotal, holdMonths:offer.holdMonths, holdMonthly:offer.holdMonthly }
+
   async function save(){
     if(!lead) return
     setSaving(true); setMsg(null)
     try{
-      const result = { arv, arvLow:Math.round(A.low), arvHigh:Math.round(A.high), confidence:A.conf?.l||null, comps:A.n,
-        rehab:rehabTotal, walk, target, open, updated_at:new Date().toISOString() }
+      const result = { ...R, arvLow:Math.round(A.low), arvHigh:Math.round(A.high),
+        tested:{ price, buyerProfit:Math.round(profitAt(stressP)) }, updated_at:new Date().toISOString() }
       const details = {...(lead.details||{}),
         beds:has(S.beds)&&S.beds!==''?num(S.beds):(lead.details||{}).beds??null,
         baths:has(S.baths)&&S.baths!==''?num(S.baths):(lead.details||{}).baths??null,
@@ -250,9 +272,9 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
           <div style={{fontWeight:700,fontSize:14}}>Subject property <span style={{color:C.muted,fontWeight:400,fontSize:12}}>{lead ? '— '+[lead.address,lead.city,lead.state].filter(Boolean).join(', ') : '— enter the details'}</span></div>
           {lead && ask>0 && <span style={{color:C.muted,fontSize:12}}>Seller asking <b style={{color:C.cream}}>{money(ask)}</b></span>}
         </div>
-        <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(4,1fr)',gap:10}}>
-          {[['beds','Beds'],['baths','Baths'],['sqft','Sqft'],['year','Year built']].map(([k,l])=>(
-            <label key={k} style={{color:C.muted,fontSize:11}}>{l}<input type="number" value={S[k]??''} onChange={e=>up('S',{...S,[k]:e.target.value})} style={{...inp,marginTop:4,fontSize:14,padding:'9px 10px'}}/></label>
+        <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(5,1fr)',gap:10}}>
+          {[['beds','Beds'],['baths','Baths'],['sqft','Sqft'],['year','Year built'],['zip','Zip (for investor prices)']].map(([k,l])=>(
+            <label key={k} style={{color:C.muted,fontSize:11}}>{l}<input type={k==='zip'?'text':'number'} value={S[k]??''} onChange={e=>up('S',{...S,[k]:e.target.value})} style={{...inp,marginTop:4,fontSize:14,padding:'9px 10px'}}/></label>
           ))}
         </div>
       </div>
@@ -428,9 +450,15 @@ export default function DealAnalyzer({leads,initialLeadId,reload,isMobile}){
         </div>
       </div>}
 
+      {arv>0 && <LockCard r={R} price={testPrice} setPrice={setTestPrice} contract={num(d.deal&&d.deal.contract_price)} isMobile={isMobile}/>}
+      {arv>0 && <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'1.15fr 1fr',gap:14,marginTop:14,alignItems:'start'}}>
+        <InvestorCard stats={inv} history={hist} buyerPrice={price+num(offer.fee)} months={months} setMonths={setMonths} hasData={purchases.length>0}/>
+        <StressCard p={stressP}/>
+      </div>}
+
       <div style={{display:'flex',gap:10,alignItems:'center',marginTop:16,flexWrap:'wrap'}}>
         <button onClick={save} disabled={!lead||!arv||saving} style={{...btn(true),padding:'12px 22px',fontSize:13,opacity:(!lead||!arv||saving)?0.5:1,cursor:(!lead||!arv)?'default':'pointer'}}>{saving?'Saving...':'Save analysis to lead'}</button>
-        <span style={{color:C.muted,fontSize:12}}>{!lead?'Pick a lead at the top to save this analysis.':!arv?'Add comps to get an ARV first.':'Updates the lead\'s ARV, Call Card, and script offer.'}</span>
+        <span style={{color:C.muted,fontSize:12}}>{!lead?'Pick a lead at the top to save this analysis.':!arv?'Add comps to get an ARV first.':'Updates the lead\'s ARV, Call Card, script offer — and the lock check the Pipeline runs before Under contract.'}</span>
       </div>
     </div>
   )

@@ -56,6 +56,9 @@ export default function TodayPage({leads,activity,team,campaigns,reload,openLead
     }
     if(st==='contract' || st==='assigned'){
       const ci = daysUntil(d.closing_date)
+      const w = l.details && l.details.comp && l.details.comp.result && l.details.comp.result.walk
+      if(st==='contract' && !d.buyer && w && Number(d.contract_price)>w)
+        slipping.push({ l, rank:0, tag:'Locked over your max', c:C.red, text:'Contract '+money(d.contract_price)+' is '+money(d.contract_price-w)+' over your walk-away'+(d.lock&&d.lock.override?' ("'+d.lock.override+'")':'')+'. Renegotiate during inspection or price it tight to buyers.' })
       const insp = daysUntil(d.inspection_end)
       if(st==='contract' && !d.buyer && insp!==null && insp<=3 && insp>=-7)
         slipping.push({ l, rank:0, tag:insp<0?'Inspection over, no buyer':'Inspection ending', c:C.red, text:insp<0 ? 'Inspection period ended '+fmtDay(d.inspection_end)+' and no buyer is lined up — your EMD may be at risk.' : 'Inspection period ends '+(insp===0?'today':fmtDay(d.inspection_end)+' (in '+insp+'d)')+' and there is no buyer yet. Blast it or extend.' })

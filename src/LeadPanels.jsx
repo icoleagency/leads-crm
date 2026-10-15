@@ -1,5 +1,7 @@
 import { leadPhones, BAD, PHONE_STATUS, markPhone, setLeadDnc, fmtPhone } from './phones'
 import { useState } from 'react'
+import { lockCheck } from './dealMath'
+import { LockChecks } from './DealSafety'
 import { LOST_REASONS, CHECK_BACK, reasonLabel, addDays, fmtDay } from './deals'
 import { PILLARS, researchLinks, REPAIRS, detailsOf, money, compResult, stageOf, stageIdx, STAGE, OUTCOME_STAGE, moveStage, patchLead, callbackOf, callbackState, fmtWhen } from './leadModel'
 import { OUTCOMES, OUTCOME, logActivity, activityErr, getCaller, saveCaller } from './activity'
@@ -363,6 +365,8 @@ export function LogCall({lead,activity,reloadActivity,reloadLeads,onNext}){
   const [pending,setPending] = useState(null)
   const [lostWhy,setLostWhy] = useState('')
   const [backIn,setBackIn] = useState(0)
+  const [lockPrice,setLockPrice] = useState('')
+  const [lockWhy,setLockWhy] = useState('')
   const [amount,setAmount] = useState('')
   const [busy,setBusy] = useState(false)
   const [msg,setMsg] = useState(null)
@@ -385,7 +389,16 @@ export function LogCall({lead,activity,reloadActivity,reloadLeads,onNext}){
 
   async function submit(outcome){
     const o = OUTCOME[outcome]
-    if((o.amount || outcome==='dead') && pending!==outcome){ setPending(outcome); setAmount(''); setLostWhy(''); setBackIn(0); return }
+    if((o.amount || outcome==='dead' || outcome==='contract') && pending!==outcome){ setPending(outcome); setAmount(''); setLostWhy(''); setBackIn(0)
+      if(outcome==='contract'){ const c = lead.details && lead.details.deal && lead.details.deal.contract_price; setLockPrice(c?String(c):''); setLockWhy('') }
+      return }
+    let lockRes = null
+    if(outcome==='contract'){
+      const pr = Number(String(lockPrice).replace(/[$,\s]/g,''))
+      lockRes = lockCheck((lead.details&&lead.details.comp&&lead.details.comp.result)||{}, pr)
+      if(!pr){ setMsg({ok:false,t:'Enter the contract price first.'}); return }
+      if(lockRes.overall==='red' && lockWhy.trim().length<5){ setMsg({ok:false,t:'This price fails the lock check — write why you\'re locking it anyway.'}); return }
+    }
     setBusy(true); setMsg(null)
     try{
       await logActivity(lead, outcome, {amount, note, caller})
@@ -398,6 +411,11 @@ export function LogCall({lead,activity,reloadActivity,reloadLeads,onNext}){
         const prevDeal = (lead.details && lead.details.deal) || {}
         if(outcome==='closed' && Number(amount)) extra.deal = {...prevDeal, fee:Number(amount), closing_date:prevDeal.closing_date||new Date().toISOString().slice(0,10)}
         if(outcome==='offer' && Number(amount)) extra.deal = {...prevDeal, last_offer:Number(amount)}
+        if(outcome==='contract' && lockRes){
+          const pr = Number(String(lockPrice).replace(/[$,\s]/g,'')), w = lead.details&&lead.details.comp&&lead.details.comp.result&&lead.details.comp.result.walk
+          extra.deal = {...prevDeal, contract_price:pr, contract_date:prevDeal.contract_date||new Date().toISOString().slice(0,10),
+            lock:{ status:lockRes.overall, walk:w||null, override:lockRes.overall==='red'?lockWhy.trim():null, by:caller||null, at:new Date().toISOString() }}
+        }
         // A new callback replaces the old one; logging any call without one completes the old one.
         if(cb && outcome!=='dead') extra.callback = { at:cb, by:caller||'VA', note:note.trim()||null, set_at:new Date().toISOString() }
         else if(existingCb) extra.callback = null
@@ -513,7 +531,19 @@ export function LogCall({lead,activity,reloadActivity,reloadLeads,onNext}){
           <button onClick={()=>setPending(null)} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'0 12px',fontSize:12,cursor:'pointer'}}>Cancel</button>
         </div>
       </div>}
-      {pending && pending!=='dead' &&
+      {pending==='contract' && (()=>{ const res = lockCheck((lead.details&&lead.details.comp&&lead.details.comp.result)||{}, Number(String(lockPrice).replace(/[$,\s]/g,''))); return (
+      <div style={{marginTop:10,background:C.ink,border:'1px solid '+C.line,borderRadius:10,padding:'10px 12px'}}>
+        <label style={{display:'block',fontSize:12,color:C.muted}}>Contract price (what you're paying the seller)
+          <input autoFocus value={lockPrice} onChange={e=>setLockPrice(e.target.value)} inputMode="numeric" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:4,background:C.panel,border:'1px solid '+C.orange,borderRadius:8,padding:'9px 12px',color:C.cream,fontSize:14,fontWeight:700,outline:'none'}}/>
+        </label>
+        <div style={{marginTop:10}}><LockChecks res={res} compact/></div>
+        {res.overall==='red' && <input value={lockWhy} onChange={e=>setLockWhy(e.target.value)} placeholder="Locking anyway? Write why (saved on the deal)" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:10,background:C.panel,border:'1px solid '+C.red+'77',borderRadius:8,padding:'8px 11px',color:C.cream,fontSize:12.5,outline:'none'}}/>}
+        <div style={{display:'flex',gap:8,marginTop:10}}>
+          <button onClick={()=>submit('contract')} disabled={busy} style={{background:res.overall==='red'?C.red:C.orange,color:C.ink,border:'none',borderRadius:8,padding:'8px 16px',fontWeight:800,fontSize:12,cursor:'pointer'}}>{res.overall==='red'?'Lock anyway':'Log — under contract'}</button>
+          <button onClick={()=>setPending(null)} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'0 12px',fontSize:12,cursor:'pointer'}}>Cancel</button>
+        </div>
+      </div>) })()}
+      {pending && pending!=='dead' && pending!=='contract' &&
       <div style={{display:'flex',gap:8,marginTop:10}}>
         <input autoFocus type="number" value={amount} onChange={e=>setAmount(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit(pending)} placeholder={OUTCOME[pending].amount+' ($)'} style={{flex:1,minWidth:0,background:C.ink,border:'1px solid '+C.orange,borderRadius:8,padding:'9px 12px',color:C.cream,fontSize:13,outline:'none'}}/>
         <button onClick={()=>submit(pending)} disabled={busy} style={{background:C.orange,color:C.ink,border:'none',borderRadius:8,padding:'0 16px',fontWeight:800,fontSize:12,cursor:'pointer'}}>Save</button>
