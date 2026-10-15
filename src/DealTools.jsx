@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { money, stageOf } from './leadModel'
 import { getCaller } from './activity'
-import { STEP_IDEAS, STEP_DUE, addDays, fmtDay, dueState, daysLate, negoOf, addNego, removeNego, offerPlan, nextStepOf, setNext, completeNext, OFFER_FU } from './deals'
+import { STEP_IDEAS, STEP_DUE, addDays, fmtDay, dueState, daysLate, negoOf, addNego, removeNego, offerPlan, nextStepOf, setNext, completeNext, OFFER_FU, checklistOf, toggleClose, LOST_REASONS, CHECK_BACK, loseLead, reasonLabel } from './deals'
+import { patchLead, STAGE } from './leadModel'
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -175,25 +176,123 @@ export function NextStepChip({ns,onClick}){
   )
 }
 
-// Panel on the lead page: next step + (from Contacted on) offer & negotiation.
+// Contract-to-close checklist with the inspection countdown.
+export function ClosingChecklist({lead,onSaved,compact}){
+  const c = checklistOf(lead)
+  const [close,setClose] = useState((lead.details||{}).close||{})
+  const [insp,setInsp] = useState(c.inspection||'')
+  const [busy,setBusy] = useState('')
+  const [err,setErr] = useState('')
+  async function flip(k,on){
+    const before = close
+    const optimistic = { ...close, [k]: on ? { done:true, at:new Date().toISOString(), by:getCaller()||null } : null }
+    setClose(optimistic); setBusy(k); setErr('')
+    try{ await toggleClose(lead, before, k, on, getCaller()); await onSaved?.() }catch(e){ setClose(before); setErr(errText(e)) }
+    setBusy('')
+  }
+  async function saveInsp(v){
+    setInsp(v); setErr('')
+    try{ await patchLead(lead, { deal:{ ...((lead.details||{}).deal||{}), inspection_end:v||null } }); await onSaved?.() }catch(e){ setErr(errText(e)) }
+  }
+  const items = c.items.map(i=>({ ...i, done: i.auto || !!(close[i.k] && close[i.k].done) }))
+  const done = items.filter(i=>i.done).length
+  const dl = c.inspDays
+  const inspColor = dl===null ? C.muted : !c.hasBuyer && dl<=2 ? C.red : dl<=5 ? C.amber : C.cream
+  return (
+    <div>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+        <div style={{flex:1,height:7,background:C.ink,borderRadius:7,overflow:'hidden'}}><div style={{width:Math.round(done/items.length*100)+'%',height:'100%',background:done===items.length?C.green:C.orange}}/></div>
+        <span style={{fontSize:12,color:C.muted,whiteSpace:'nowrap'}}><b style={{color:C.cream}}>{done}</b> of {items.length} done</span>
+      </div>
+      <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',background:C.ink,borderRadius:8,padding:'8px 10px',marginBottom:8}}>
+        <span style={{fontSize:12,color:C.muted}}>Inspection period ends</span>
+        <input type="date" value={insp} onChange={e=>saveInsp(e.target.value)} style={{...inp,width:150,padding:'4px 8px',fontSize:12}}/>
+        {dl!==null && <span style={{fontSize:12,fontWeight:700,color:inspColor}}>{dl<0?'ended '+(-dl)+'d ago':dl===0?'ends today':'in '+dl+'d'}{!c.hasBuyer && dl<=5 ? ' — no buyer yet' : ''}</span>}
+      </div>
+      {items.map(i=>(
+        <label key={i.k} style={{display:'flex',alignItems:'center',gap:9,padding:compact?'5px 2px':'7px 2px',borderBottom:'1px solid '+C.line,cursor:i.auto?'default':'pointer',fontSize:12.5,opacity:busy===i.k?0.6:1}}>
+          <input type="checkbox" checked={i.done} disabled={i.auto||(!!busy&&busy!==i.k)} onChange={e=>flip(i.k,e.target.checked)} style={{accentColor:C.green,width:15,height:15}}/>
+          <span style={{flex:1,color:i.done?C.muted:C.cream,textDecoration:i.done?'line-through':'none'}}>{i.l}</span>
+          {i.auto && <span style={{fontSize:10.5,color:C.muted}}>from deal details</span>}
+          {!i.done && i.due && <span style={{fontSize:11,fontWeight:600,color:STATE_COLOR[dueState(i.due)]}}>by {fmtDay(i.due)}</span>}
+          {i.done && !i.auto && close[i.k] && close[i.k].at && <span style={{fontSize:10.5,color:C.muted}}>{new Date(close[i.k].at).toLocaleDateString([], {month:'short',day:'numeric'})}</span>}
+        </label>
+      ))}
+      {err && <div style={{color:C.red,fontSize:12,marginTop:8}}>{err}</div>}
+      {done===items.length && <div style={{color:C.green,fontSize:12.5,marginTop:8,fontWeight:600}}>Everything's done — move it to Closed.</div>}
+    </div>
+  )
+}
+
+// "Why is this deal dead?" — reason, note, and an optional check-back date that puts it in Nurture instead.
+export function LostForm({lead,stage,target,onDone,onCancel}){
+  const [reason,setReason] = useState('')
+  const [note,setNote] = useState('')
+  const [days,setDays] = useState(target==='nurture'?90:0)
+  const [busy,setBusy] = useState(false)
+  const [err,setErr] = useState('')
+  const worth = reason && (LOST_REASONS.find(r=>r[0]===reason)||[])[2]
+  async function save(){
+    setBusy(true); setErr('')
+    try{ await loseLead(lead,{ reason, note, nurtureDays:days, by:getCaller(), from:stage }); await onDone?.(days?'nurture':'dead') }catch(e){ setErr(errText(e)); setBusy(false) }
+  }
+  return (
+    <div>
+      <div style={{color:C.muted,fontSize:12,marginBottom:8}}>Why isn't this one moving forward?</div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+        {LOST_REASONS.map(([k,l])=><button key={k} onClick={()=>setReason(k)} style={chip(reason===k)}>{l}</button>)}
+      </div>
+      <input value={note} onChange={e=>setNote(e.target.value)} placeholder="Note (optional) — e.g. wants $180k, retail listing in spring" style={{...inp,marginTop:10}}/>
+      <div style={{marginTop:12,background:C.ink,borderRadius:10,padding:'10px 12px'}}>
+        <div style={{fontSize:12.5,fontWeight:700,color:days?'#a78bfa':C.cream}}>Check back later?</div>
+        <div style={{color:C.muted,fontSize:11.5,margin:'3px 0 8px'}}>{worth?'Sellers with this reason often come back — nurture beats dead. ':''}Picking a time puts it in <b style={{color:'#a78bfa'}}>Nurture</b> and it comes back to your call list on that date.</div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+          <button onClick={()=>setDays(0)} style={chip(!days)}>No — it's dead</button>
+          {CHECK_BACK.map(([l,n])=><button key={n} onClick={()=>setDays(n)} style={{...chip(days===n),...(days===n?{background:'#a78bfa',borderColor:'#a78bfa'}:{})}}>{l}</button>)}
+        </div>
+      </div>
+      {err && <div style={{color:C.red,fontSize:12,marginTop:8}}>{err}</div>}
+      <div style={{display:'flex',gap:8,marginTop:14}}>
+        <button onClick={save} disabled={busy||!reason} style={{...btn,opacity:busy||!reason?0.5:1,...(days?{background:'#a78bfa'}:{})}}>{busy?'Saving…':days?'Move to Nurture · back '+fmtDay(addDays(days)):'Mark dead'}</button>
+        {onCancel && <button onClick={onCancel} style={ghost}>Cancel</button>}
+      </div>
+    </div>
+  )
+}
+
+// Panel on the lead page: next step, then negotiation or close checklist depending on stage.
 export function DealPanel({lead,activity,reloadLeads}){
   const stage = stageOf(lead, activity)
   const [open,setOpen] = useState(false)
+  const [losing,setLosing] = useState(false)
   const ns = nextStepOf(lead, activity, stage)
-  const showNego = !['new','dead','closed'].includes(stage)
+  const d = lead.details||{}
+  const showNego = ['contacted','appointment','offer'].includes(stage)
+  const inContract = ['contract','assigned'].includes(stage)
   const card = {background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:18}
+  const h = {fontWeight:700,fontSize:14,marginTop:18,marginBottom:10}
   return (
     <div style={card}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
-        <div style={{fontWeight:700,fontSize:14}}>Next step</div>
-        <button onClick={()=>setOpen(!open)} style={{background:'transparent',border:'none',color:C.orange,fontSize:12,fontWeight:700,cursor:'pointer'}}>{open?'Close':ns&&ns.kind==='manual'?'Change':'Set'}</button>
+        <div style={{fontWeight:700,fontSize:14}}>Next step <span style={{color:STAGE[stage]?.c,fontWeight:600,fontSize:12}}>· {STAGE[stage]?.l}</span></div>
+        {!['closed'].includes(stage) && <button onClick={()=>setOpen(!open)} style={{background:'transparent',border:'none',color:C.orange,fontSize:12,fontWeight:700,cursor:'pointer'}}>{open?'Close':ns&&ns.kind==='manual'?'Change':'Set'}</button>}
       </div>
-      {!open && <NextStepChip ns={ns} onClick={()=>setOpen(true)}/>}
+      {!open && stage!=='closed' && stage!=='dead' && <NextStepChip ns={ns} onClick={()=>setOpen(true)}/>}
       {open && <div style={{marginTop:10}}><NextStepEditor lead={lead} stage={stage} activity={activity} onSaved={reloadLeads} onClose={()=>setOpen(false)}/></div>}
+      {(stage==='dead'||stage==='nurture') && d.lost && <div style={{fontSize:12,color:C.muted,marginTop:8}}>
+        {stage==='dead'?'Dead':'Nurturing'} — <b style={{color:C.cream}}>{reasonLabel(d.lost.reason)}</b>{d.lost.note?' · '+d.lost.note:''}{d.lost.by?' · '+d.lost.by:''} · {new Date(d.lost.at).toLocaleDateString([], {month:'short',day:'numeric'})}
+      </div>}
       {showNego && <>
-        <div style={{fontWeight:700,fontSize:14,marginTop:18,marginBottom:10}}>Offer &amp; negotiation</div>
+        <div style={h}>Offer &amp; negotiation</div>
         <NegotiationEditor lead={lead} stage={stage} activity={activity} onSaved={reloadLeads}/>
       </>}
+      {inContract && <>
+        <div style={h}>Contract to close</div>
+        <ClosingChecklist lead={lead} onSaved={reloadLeads}/>
+      </>}
+      {!['dead','closed','new'].includes(stage) && (losing
+        ? <div style={{marginTop:16,borderTop:'1px solid '+C.line,paddingTop:14}}><LostForm lead={lead} stage={stage} target="dead" onDone={async()=>{ setLosing(false); await reloadLeads?.() }} onCancel={()=>setLosing(false)}/></div>
+        : <button onClick={()=>setLosing(true)} style={{...ghost,marginTop:16,padding:'6px 12px',fontSize:12}}>Deal not moving? Mark dead or nurture…</button>)}
     </div>
   )
 }

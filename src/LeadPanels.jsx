@@ -1,5 +1,6 @@
 import { leadPhones, BAD, PHONE_STATUS, markPhone, setLeadDnc, fmtPhone } from './phones'
 import { useState } from 'react'
+import { LOST_REASONS, CHECK_BACK, reasonLabel, addDays, fmtDay } from './deals'
 import { PILLARS, researchLinks, REPAIRS, detailsOf, money, compResult, stageOf, stageIdx, STAGE, OUTCOME_STAGE, moveStage, patchLead, callbackOf, callbackState, fmtWhen } from './leadModel'
 import { OUTCOMES, OUTCOME, logActivity, activityErr, getCaller, saveCaller } from './activity'
 
@@ -360,6 +361,8 @@ export function LogCall({lead,activity,reloadActivity,reloadLeads,onNext}){
   const [caller,setCaller] = useState(getCaller())
   const [note,setNote] = useState('')
   const [pending,setPending] = useState(null)
+  const [lostWhy,setLostWhy] = useState('')
+  const [backIn,setBackIn] = useState(0)
   const [amount,setAmount] = useState('')
   const [busy,setBusy] = useState(false)
   const [msg,setMsg] = useState(null)
@@ -382,14 +385,15 @@ export function LogCall({lead,activity,reloadActivity,reloadLeads,onNext}){
 
   async function submit(outcome){
     const o = OUTCOME[outcome]
-    if(o.amount && pending!==outcome){ setPending(outcome); setAmount(''); return }
+    if((o.amount || outcome==='dead') && pending!==outcome){ setPending(outcome); setAmount(''); setLostWhy(''); setBackIn(0); return }
     setBusy(true); setMsg(null)
     try{
       await logActivity(lead, outcome, {amount, note, caller})
       saveCaller(caller)
       let moved = ''
       try{
-        const cur = stageOf(lead, activity), target = OUTCOME_STAGE[outcome]
+        const cur = stageOf(lead, activity)
+        const target = outcome==='dead' && backIn ? 'nurture' : OUTCOME_STAGE[outcome]
         const extra = dirty ? intelPatch() : {}
         const prevDeal = (lead.details && lead.details.deal) || {}
         if(outcome==='closed' && Number(amount)) extra.deal = {...prevDeal, fee:Number(amount), closing_date:prevDeal.closing_date||new Date().toISOString().slice(0,10)}
@@ -397,14 +401,20 @@ export function LogCall({lead,activity,reloadActivity,reloadLeads,onNext}){
         // A new callback replaces the old one; logging any call without one completes the old one.
         if(cb && outcome!=='dead') extra.callback = { at:cb, by:caller||'VA', note:note.trim()||null, set_at:new Date().toISOString() }
         else if(existingCb) extra.callback = null
-        const forward = target && (target==='dead' ? cur!=='dead' : stageIdx(target)>stageIdx(cur))
-        if(forward){ await moveStage(lead, target, extra); moved = ' · moved to '+STAGE[target].l+' in Pipeline' }
+        if(outcome==='dead'){
+          const now = new Date().toISOString()
+          extra.lost = { reason:lostWhy||'other', note:note.trim()||null, by:caller||null, at:now, from:cur }
+          extra.next = null
+          extra.nurture = backIn ? { until:addDays(backIn), reason:lostWhy||'other', by:caller||null, at:now } : null
+        }
+        const forward = target && (target==='dead'||target==='nurture' ? cur!==target : stageIdx(target)>stageIdx(cur))
+        if(forward){ await moveStage(lead, target, extra); moved = ' · moved to '+STAGE[target].l+(target==='nurture'?' — back on '+fmtDay(extra.nurture.until):' in Pipeline') }
         else if(Object.keys(extra).length){ await patchLead(lead, extra) }
         if(extra.callback) moved += ' · callback set for '+fmtWhen(extra.callback.at)
         if(dirty) moved += ' · seller info saved'
         if((forward || Object.keys(extra).length) && reloadLeads) reloadLeads()
       }catch{ moved = ' · (pipeline stage not updated — try moving it on the Pipeline page)' }
-      setMsg({ok:true,t:'Logged: '+o.label+moved}); setNote(''); setPending(null); setAmount(''); setCb(''); setCbPick(false); setPill({})
+      setMsg({ok:true,t:'Logged: '+o.label+(outcome==='dead'&&lostWhy?' ('+reasonLabel(lostWhy).toLowerCase()+')':'')+moved}); setNote(''); setPending(null); setLostWhy(''); setBackIn(0); setAmount(''); setCb(''); setCbPick(false); setPill({})
       reloadActivity()
     }catch(e){ setMsg({ok:false,t:activityErr(e.message)}) }
     setBusy(false)
@@ -489,7 +499,21 @@ export function LogCall({lead,activity,reloadActivity,reloadLeads,onNext}){
           <button key={o.key} disabled={busy} onClick={()=>submit(o.key)} style={{background:pending===o.key?C.orange:C.ink,color:pending===o.key?C.ink:(o.key==='dead'?C.muted:C.cream),border:'1px solid '+(pending===o.key?C.orange:C.line),borderRadius:8,padding:'8px 11px',fontSize:12,fontWeight:600,cursor:busy?'default':'pointer'}}>{o.label}</button>
         ))}
       </div>
-      {pending &&
+      {pending==='dead' &&
+      <div style={{marginTop:10,background:C.ink,border:'1px solid '+C.line,borderRadius:10,padding:'10px 12px'}}>
+        <div style={{fontSize:12,color:C.muted,marginBottom:6}}>Why? <span style={{fontSize:11}}>(type details in the note above)</span></div>
+        <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>{LOST_REASONS.map(([k,l])=>chip(lostWhy===k, l, ()=>setLostWhy(lostWhy===k?'':k), C.red))}</div>
+        <div style={{fontSize:12,color:C.muted,margin:'10px 0 6px'}}>Check back later? <span style={{fontSize:11}}>Puts them in Nurture and back on the call list then.</span></div>
+        <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+          {chip(!backIn,'No — dead',()=>setBackIn(0),C.muted)}
+          {CHECK_BACK.map(([l,n])=>chip(backIn===n,l,()=>setBackIn(n),'#a78bfa'))}
+        </div>
+        <div style={{display:'flex',gap:8,marginTop:10}}>
+          <button onClick={()=>submit('dead')} disabled={busy} style={{background:backIn?'#a78bfa':C.orange,color:C.ink,border:'none',borderRadius:8,padding:'8px 16px',fontWeight:800,fontSize:12,cursor:'pointer'}}>{backIn?'Log & nurture':'Log as not interested'}</button>
+          <button onClick={()=>setPending(null)} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'0 12px',fontSize:12,cursor:'pointer'}}>Cancel</button>
+        </div>
+      </div>}
+      {pending && pending!=='dead' &&
       <div style={{display:'flex',gap:8,marginTop:10}}>
         <input autoFocus type="number" value={amount} onChange={e=>setAmount(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit(pending)} placeholder={OUTCOME[pending].amount+' ($)'} style={{flex:1,minWidth:0,background:C.ink,border:'1px solid '+C.orange,borderRadius:8,padding:'9px 12px',color:C.cream,fontSize:13,outline:'none'}}/>
         <button onClick={()=>submit(pending)} disabled={busy} style={{background:C.orange,color:C.ink,border:'none',borderRadius:8,padding:'0 16px',fontWeight:800,fontSize:12,cursor:'pointer'}}>Save</button>

@@ -32,10 +32,11 @@ export const STEP_IDEAS = {
   offer:['Follow up on offer','Send written offer','Get their counter','Talk to the other decision maker'],
   contract:['Open title','Collect EMD receipt','Send deal to buyers','Schedule inspection','Set closing date'],
   assigned:['Confirm buyer EMD','Send assignment to title','Confirm closing date','Collect fee'],
+  nurture:['Check back in','Send a mailer / text','Re-run comps'],
   closed:[], dead:['Check back in 90 days'],
 }
 // Default due date (days from today) when you pick an idea.
-export const STEP_DUE = { contacted:1, appointment:1, offer:2, contract:2, assigned:3, new:1, dead:90 }
+export const STEP_DUE = { contacted:1, appointment:1, offer:2, contract:2, assigned:3, new:1, dead:90, nurture:30 }
 
 // ---------- negotiation ----------
 const ts = x => new Date(x).getTime()
@@ -96,6 +97,14 @@ export function nextStepOf(lead, activity, stage){
   if(d.next && d.next.text) return { kind:'manual', text:d.next.text, due:d.next.due||null, state:dueState(d.next.due) }
   const cb = callbackOf(lead)
   if(cb){ const day = localDay(new Date(cb.at)); return { kind:'callback', text:'Call back'+(cb.note?' — '+cb.note:''), due:day, state:dueState(day), at:cb.at } }
+  if(stage==='nurture'){
+    const n = d.nurture||{}
+    return { kind:'nurture', text:'Check back'+(n.reason?' — '+reasonLabel(n.reason).toLowerCase():''), due:n.until||null, state:dueState(n.until) }
+  }
+  if(stage==='contract' || stage==='assigned'){
+    const c = checklistOf(lead)
+    if(c.next) return { kind:'checklist', text:c.next.l, due:c.next.due, state:dueState(c.next.due), list:c }
+  }
   if(stage==='offer'){
     const p = offerPlan(lead, activity)
     if(p && p.finished) return { kind:'offer_done', text:'Follow-ups done — make a final offer, nurture, or mark dead', due:null, state:'overdue', plan:p }
@@ -115,4 +124,58 @@ export async function completeNext(lead, by){
   const done = [{ ...d.next, done_at:new Date().toISOString(), done_by:by||null }, ...(d.steps_done||[])].slice(0,20)
   return patchLead(lead, { next:null, steps_done:done })
 }
+// ---------- contract-to-close checklist ----------
+// [key, label, which date it's due by, auto-done from deal details]
+export const CLOSE_STEPS = [
+  ['signed','Contract signed by seller','contract'],
+  ['emd','Your EMD deposited with title','contract'],
+  ['title','Title opened','contract'],
+  ['buyer','Buyer found','inspection', d=>!!(d.deal&&d.deal.buyer)],
+  ['assign','Assignment contract signed','inspection'],
+  ['buyer_emd','Buyer EMD received','inspection'],
+  ['clear','Title clear — no liens or issues','closing'],
+  ['scheduled','Closing date set','closing', d=>!!(d.deal&&d.deal.closing_date)],
+  ['fee','Fee received','closing'],
+]
+export function checklistOf(lead){
+  const d = lead.details||{}, deal = d.deal||{}, st = d.close||{}
+  const dates = {
+    contract: deal.contract_date ? addDays(3, deal.contract_date+'T12:00:00') : null,
+    inspection: deal.inspection_end || null,
+    closing: deal.closing_date || null,
+  }
+  const items = CLOSE_STEPS.map(([k,l,by,auto])=>{
+    const a = !!(auto && auto(d)), m = st[k]
+    return { k, l, auto:a, done: a || !!(m && m.done), at:m&&m.at, by:m&&m.by, due:dates[by] }
+  })
+  const done = items.filter(i=>i.done).length
+  const insp = deal.inspection_end ? Math.round((new Date(deal.inspection_end+'T12:00:00')-new Date(localDay()+'T12:00:00'))/DAY) : null
+  return { items, done, total:items.length, next:items.find(i=>!i.done)||null, inspection:deal.inspection_end||null, inspDays:insp, hasBuyer:!!deal.buyer }
+}
+export function toggleClose(lead, close, k, on, by){
+  const next = { ...(close||{}), [k]: on ? { done:true, at:new Date().toISOString(), by:by||null } : null }
+  return patchLead(lead, { close:next }).then(()=>next)
+}
+
+// ---------- dead / nurture ----------
+// [key, label, worth nurturing?]
+export const LOST_REASONS = [
+  ['price','Price too high',true], ['not_now','Not motivated right now',true], ['agent','Listing with an agent',true],
+  ['unreachable',"Can't reach them",true], ['investor','Sold to another investor',false], ['wrong','Wrong owner / bad info',false],
+  ['no_fit',"Property doesn't fit",false], ['other','Other',true],
+]
+export const reasonLabel = k => (LOST_REASONS.find(r=>r[0]===k)||[k,k])[1]
+export const CHECK_BACK = [['30 days',30],['60 days',60],['90 days',90],['6 months',180]]
+export function loseLead(lead, { reason, note, nurtureDays, by, from }){
+  const at = new Date().toISOString()
+  const lost = { reason, note:(note||'').trim()||null, by:by||null, at, from:from||null }
+  if(nurtureDays) return patchLead(lead, { stage:'nurture', stage_at:at, lost, next:null, nurture:{ until:addDays(nurtureDays), reason, by:by||null, at } })
+  return patchLead(lead, { stage:'dead', stage_at:at, lost, next:null, nurture:null })
+}
+export function lostStats(leads){
+  const m = {}
+  for(const l of leads){ const r = l.details && l.details.lost && l.details.lost.reason; if(r) m[r] = (m[r]||0)+1 }
+  return Object.entries(m).map(([k,n])=>({ k, l:reasonLabel(k), n })).sort((a,b)=>b.n-a.n)
+}
+
 export const stageLabel = k => (STAGE[k]||{}).l || k

@@ -166,7 +166,7 @@ export default function VaWorkspace({leads,activity,campaigns,team,teamErr,reloa
               {shown.map(x=>{
                 const { l, kind, label, tries, last, cb, cs, score } = x
                 const sc = score>=70?C.red:score>=50?C.orange:score>=30?C.amber:C.muted
-                const tagC = kind==='callback' ? (cs==='overdue'?C.red:cs==='today'?C.amber:C.blue) : kind==='followup' ? C.green : kind==='new' ? C.blue : kind==='parked' ? C.muted : kind==='nophone' ? C.red : C.amber
+                const tagC = kind==='callback' ? (cs==='overdue'?C.red:cs==='today'?C.amber:C.blue) : kind==='followup' ? C.green : kind==='nurture' ? '#a78bfa' : kind==='new' ? C.blue : kind==='parked' ? C.muted : kind==='nophone' ? C.red : C.amber
                 return (
                   <div key={l.id} onClick={()=>{ setWork({ ids:tabList.map(y=>y.l.id), i:tabList.findIndex(y=>y.l.id===l.id) }); window.scrollTo({top:0}) }} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 6px',borderBottom:'1px solid '+C.line,cursor:'pointer'}}>
                     <span title={'Score '+score} style={{minWidth:30,height:26,borderRadius:7,background:sc+'22',color:sc,border:'1px solid '+sc,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:800,fontSize:12,flexShrink:0}}>{score}</span>

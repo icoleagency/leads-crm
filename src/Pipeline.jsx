@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { STAGES, STAGE, STALE_DAYS, stageOf, stageSince, daysSince, compResult, detailsOf, moveStage, patchLead, money } from './leadModel'
-import { nextStepOf, urgency, negoOf, offerPlan, NEEDS_STEP } from './deals'
-import { Modal, NextStepEditor, NegotiationEditor, NextStepChip, FollowUpPlan } from './DealTools'
+import { nextStepOf, urgency, negoOf, offerPlan, NEEDS_STEP, checklistOf, lostStats, reasonLabel } from './deals'
+import { Modal, NextStepEditor, NegotiationEditor, NextStepChip, FollowUpPlan, ClosingChecklist, LostForm } from './DealTools'
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -10,7 +10,7 @@ const C = {
 }
 const DEAL_STAGES = ['contract','assigned','closed']
 const DEFAULT_FEE = 15000
-const BOARD = STAGES.filter(([k])=>k!=='dead' && k!=='new')
+const BOARD = [...STAGES.filter(([k])=>!['dead','new','nurture'].includes(k)), STAGES.find(([k])=>k==='nurture')]
 const NEW_CAP = 60
 const countyOf = l => { const c = l.details && l.details.county; return c ? String(c).replace(/\s*county$/i,'').trim() : '' }
 
@@ -33,7 +33,8 @@ export default function Pipeline({leads,activity,reload,openLead,analyze,isMobil
   const [over,setOver] = useState(null)
   const [showDead,setShowDead] = useState(false)
   const [showNew,setShowNew] = useState(false)
-  const [deal,setDeal] = useState(null)        // lead being edited in the deal modal
+  const [dealFor,setDeal] = useState(null)     // lead id for the deal modal
+  const [lostFor,setLostFor] = useState(null)  // {id, stage} when moving to dead / nurture
   const [stepFor,setStepFor] = useState(null)  // lead id for the next-step modal
   const [negoFor,setNegoFor] = useState(null)  // lead id for the negotiation modal
   const [err,setErr] = useState('')
@@ -76,6 +77,7 @@ export default function Pipeline({leads,activity,reload,openLead,analyze,isMobil
   async function move(lead, stage){
     const was = local[lead.id]||stageOf(lead,activity)
     if(was===stage) return
+    if(stage==='dead' || stage==='nurture'){ setLostFor({ id:lead.id, stage, from:was }); return }
     setLocal(m=>({...m,[lead.id]:stage})); setErr('')
     let ok = true
     try{
@@ -85,22 +87,24 @@ export default function Pipeline({leads,activity,reload,openLead,analyze,isMobil
     setLocal(m=>{ const n={...m}; delete n[lead.id]; return n })
     if(!ok) return
     // Ask for what happens next, right when it's fresh.
-    if(stage==='contract' && !dealOf(lead).contract_price) setDeal(lead)
+    if(stage==='contract' && !dealOf(lead).contract_price) setDeal(lead.id)
     else if(stage==='offer' && !negoOf(lead,activity).lastYou) setNegoFor(lead.id)
     else if(['contacted','appointment','contract','assigned'].includes(stage) && !(lead.details&&lead.details.next)) setStepFor(lead.id)
   }
 
-  const live = rows.filter(r=>!['new','closed','dead'].includes(r.s))
+  const working = rows.filter(r=>!['new','closed','dead'].includes(r.s))
+  const live = working.filter(r=>r.s!=='nurture')
+  const nurturing = working.length-live.length
   const underContract = rows.filter(r=>['contract','assigned'].includes(r.s)).map(r=>r.l)
   const projected = underContract.reduce((s,l)=>s+feeOf(l).v,0)
   const anyEst = underContract.some(l=>feeOf(l).est)
   const closed = rows.filter(r=>r.s==='closed').map(r=>r.l)
   const closedFees = closed.reduce((s,l)=>s+(Number(dealOf(l).fee)||0),0)
-  const overdue = live.filter(r=>r.ns && r.ns.state==='overdue').length
-  const today = live.filter(r=>r.ns && r.ns.state==='today').length
+  const overdue = working.filter(r=>r.ns && r.ns.state==='overdue').length
+  const today = working.filter(r=>r.ns && r.ns.state==='today').length
   const noStep = live.filter(r=>r.noStep).length
   const staleCount = live.filter(r=>r.stale).length
-  const attnCount = live.filter(r=>r.attention).length
+  const attnCount = working.filter(r=>r.attention).length
   const newCount = rows.filter(r=>r.s==='new').length
   const filtering = !!(ql||type||county||attention)
 
@@ -111,7 +115,9 @@ export default function Pipeline({leads,activity,reload,openLead,analyze,isMobil
   const sel = {background:C.ink,border:'1px solid '+C.line,borderRadius:20,padding:'6px 12px',color:C.cream,fontSize:12.5,maxWidth:170}
 
   const byId = id => leads.find(x=>x.id===id)
-  const stepLead = stepFor!==null && byId(stepFor), negoLead = negoFor!==null && byId(negoFor)
+  const stepLead = stepFor!==null && byId(stepFor), negoLead = negoFor!==null && byId(negoFor), dealLead = dealFor!==null && byId(dealFor), lostLead = lostFor && byId(lostFor.id)
+  const deadLeads = rows.filter(r=>r.s==='dead'||r.s==='nurture').map(r=>r.l)
+  const why = showDead ? lostStats(deadLeads) : []
 
   const column = ([k,label,color]) => {
     const all = inStage(k)
@@ -130,7 +136,7 @@ export default function Pipeline({leads,activity,reload,openLead,analyze,isMobil
         </div>
         <div style={{overflowY:'auto',flex:1,display:'flex',flexDirection:'column',gap:8,paddingRight:2}}>
           {items.length===0 && <div style={{color:C.muted,fontSize:12,padding:'10px 4px',textAlign:'center'}}>{over===k?'Drop here':'—'}</div>}
-          {items.map(r=><Card key={r.l.id} r={r} activity={activity} onMove={s=>move(r.l,s)} onOpen={()=>openLead(r.l.id)} onDeal={()=>setDeal(r.l)} onStep={()=>setStepFor(r.l.id)} onNego={()=>setNegoFor(r.l.id)} onAnalyze={()=>analyze(r.l.id)} pending={!!local[r.l.id]}/>)}
+          {items.map(r=><Card key={r.l.id} r={r} activity={activity} onMove={s=>move(r.l,s)} onOpen={()=>openLead(r.l.id)} onDeal={()=>setDeal(r.l.id)} onStep={()=>setStepFor(r.l.id)} onNego={()=>setNegoFor(r.l.id)} onAnalyze={()=>analyze(r.l.id)} pending={!!local[r.l.id]}/>)}
           {all.length>items.length && <div style={{color:C.muted,fontSize:11.5,textAlign:'center',padding:6}}>+ {all.length-items.length} more — search to find one, or work them from the VA Workspace</div>}
         </div>
       </div>
@@ -147,7 +153,7 @@ export default function Pipeline({leads,activity,reload,openLead,analyze,isMobil
       </div>
 
       <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(4,1fr)',gap:10,marginTop:16}}>
-        <div style={tile}><div style={cap}>Active deals</div><div style={{fontSize:24,fontFamily:'Georgia,serif',fontWeight:700,marginTop:4}}>{live.length}</div><div style={{color:staleCount?C.amber:C.muted,fontSize:11,marginTop:2}}>{staleCount?staleCount+' stale':'nothing stale'}{noStep?' · '+noStep+' without a next step':''}</div></div>
+        <div style={tile}><div style={cap}>Active deals</div><div style={{fontSize:24,fontFamily:'Georgia,serif',fontWeight:700,marginTop:4}}>{live.length}</div><div style={{color:staleCount?C.amber:C.muted,fontSize:11,marginTop:2}}>{staleCount?staleCount+' stale':'nothing stale'}{noStep?' · '+noStep+' without a next step':''}{nurturing?' · '+nurturing+' nurturing':''}</div></div>
         <div onClick={()=>setAttention(true)} style={{...tile,cursor:'pointer',borderColor:overdue?C.red+'77':C.line}}><div style={cap}>Next steps due</div><div style={{fontSize:24,fontFamily:'Georgia,serif',fontWeight:700,marginTop:4,color:overdue?C.red:today?C.amber:C.cream}}>{overdue+today}</div><div style={{color:overdue?C.red:C.muted,fontSize:11,marginTop:2}}>{overdue?overdue+' overdue · ':''}{today} due today</div></div>
         <div style={tile}><div style={cap}>Projected fees</div><div style={{fontSize:24,fontFamily:'Georgia,serif',fontWeight:700,marginTop:4,color:C.orange}}>{money(projected)}</div><div style={{color:C.muted,fontSize:11,marginTop:2}}>{underContract.length} under contract{anyEst?' · incl. $15k estimates':''}</div></div>
         <div style={tile}><div style={cap}>Closed fees</div><div style={{fontSize:24,fontFamily:'Georgia,serif',fontWeight:700,marginTop:4,color:C.green}}>{money(closedFees)}</div><div style={{color:C.muted,fontSize:11,marginTop:2}}>{closed.length} closed deal{closed.length===1?'':'s'}</div></div>
@@ -163,6 +169,19 @@ export default function Pipeline({leads,activity,reload,openLead,analyze,isMobil
         <button onClick={()=>setShowNew(!showNew)} style={pill(showNew)}>{showNew?'Hide':'Show'} new leads ({newCount.toLocaleString()})</button>
         <button onClick={()=>setShowDead(!showDead)} style={pill(showDead)}>{showDead?'Hide':'Show'} dead ({rows.filter(r=>r.s==='dead').length})</button>
       </div>
+
+      {showDead && <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:14,padding:'12px 15px',marginTop:12}}>
+        <div style={{fontWeight:700,fontSize:13.5,marginBottom:8}}>Why deals die <span style={{color:C.muted,fontWeight:400,fontSize:12}}>— dead and nurture, by the reason you picked</span></div>
+        {why.length===0 ? <div style={{color:C.muted,fontSize:12.5}}>No reasons recorded yet. From now on, moving a deal to Dead or Nurture asks why.</div> :
+        <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'1fr 1fr',gap:'4px 24px'}}>
+          {why.map(w=>{ const max = why[0].n; return (
+            <div key={w.k} style={{display:'flex',alignItems:'center',gap:8,fontSize:12}}>
+              <span style={{width:isMobile?130:170,color:C.cream}}>{w.l}</span>
+              <div style={{flex:1,height:8,background:C.ink,borderRadius:6}}><div style={{width:(w.n/max*100)+'%',height:'100%',background:C.red,borderRadius:6,opacity:0.8}}/></div>
+              <b style={{width:24,textAlign:'right'}}>{w.n}</b>
+            </div>) })}
+        </div>}
+      </div>}
 
       {err && <div style={{marginTop:12,fontSize:12.5,color:C.red,background:C.red+'14',border:'1px solid '+C.red+'44',borderRadius:8,padding:'9px 12px'}}>{err}</div>}
 
@@ -181,7 +200,10 @@ export default function Pipeline({leads,activity,reload,openLead,analyze,isMobil
       </div>}
       {filtering && <div style={{color:C.muted,fontSize:12,marginTop:4}}>Showing {shown.filter(r=>showNew||r.s!=='new').filter(r=>showDead||r.s!=='dead').length} matching</div>}
 
-      {deal && <DealModal lead={deal} onClose={()=>setDeal(null)} onSaved={async()=>{ setDeal(null); await reload() }}/>}
+      {dealLead && <DealModal lead={dealLead} onClose={()=>setDeal(null)} onSaved={async()=>{ setDeal(null); await reload() }} onChecklist={reload}/>}
+      {lostLead && <Modal title={lostFor.stage==='nurture'?'Move to Nurture':'Mark dead'} sub={lostLead.name+' · was '+STAGE[lostFor.from].l} onClose={()=>setLostFor(null)}>
+        <LostForm lead={lostLead} stage={lostFor.from} target={lostFor.stage} onCancel={()=>setLostFor(null)} onDone={async()=>{ setLostFor(null); await reload() }}/>
+      </Modal>}
       {stepLead && <Modal title="Next step" sub={stepLead.name+' · '+STAGE[rows.find(r=>r.l.id===stepLead.id)?.s||'new'].l} onClose={()=>setStepFor(null)}>
         <NextStepEditor lead={stepLead} stage={rows.find(r=>r.l.id===stepLead.id)?.s||'new'} activity={activity} onSaved={reload} onClose={()=>setStepFor(null)}/>
       </Modal>}
@@ -231,8 +253,17 @@ function Card({r,activity,onMove,onOpen,onDeal,onStep,onNego,onAnalyze,pending})
         {stage==='closed' && dl.closing_date && <div style={{color:C.muted}}>Closed {fmtDate(dl.closing_date)}</div>}
       </div>}
 
+      {(stage==='contract'||stage==='assigned') && (()=>{ const c = checklistOf(lead); const dl = c.inspDays; return (
+        <div onClick={onDeal} style={{marginTop:7,cursor:'pointer'}} title="Open the close checklist">
+          <div style={{display:'flex',alignItems:'center',gap:7}}>
+            <div style={{flex:1,height:5,background:C.ink,borderRadius:5,overflow:'hidden'}}><div style={{width:(c.done/c.total*100)+'%',height:'100%',background:c.done===c.total?C.green:C.orange}}/></div>
+            <span style={{fontSize:10.5,color:C.muted}}>{c.done}/{c.total}</span>
+          </div>
+          {dl!==null && dl>=-3 && stage==='contract' && <div style={{fontSize:11,marginTop:4,fontWeight:600,color:!c.hasBuyer&&dl<=2?C.red:dl<=5?C.amber:C.muted}}>Inspection {dl<0?'ended '+(-dl)+'d ago':dl===0?'ends today':'ends in '+dl+'d'}{!c.hasBuyer?' · no buyer':''}</div>}
+        </div>) })()}
+      {(stage==='dead'||stage==='nurture') && d.lost && <div style={{...small,marginTop:5}}>{reasonLabel(d.lost.reason)}{d.lost.note?' — '+d.lost.note:''}</div>}
       {plan && !(ns && ns.kind==='offer_fu') && <FollowUpPlan plan={plan} small/>}
-      {!['closed','dead'].includes(stage) && <NextStepChip ns={ns} onClick={onStep}/>}
+      {!['closed','dead'].includes(stage) && <NextStepChip ns={ns} onClick={stage==='nurture'?onOpen:onStep}/>}
       {stale && !ns && <div style={{color:C.amber,fontSize:11,marginTop:6}}>Stale — {days} days in {STAGE[stage].l.toLowerCase()}</div>}
 
       <div style={{display:'flex',gap:6,marginTop:8,alignItems:'center'}}>
@@ -256,7 +287,7 @@ const DEAL_FIELDS = [
   ['fee','Assignment fee','number'],
 ]
 
-function DealModal({lead,onClose,onSaved}){
+function DealModal({lead,onClose,onSaved,onChecklist}){
   const cr = compResult(lead)
   const [f,setF] = useState(()=>({ ...Object.fromEntries(DEAL_FIELDS.map(([k])=>[k,''])), notes:'', ...dealOf(lead) }))
   const [busy,setBusy] = useState(false)
@@ -266,8 +297,8 @@ function DealModal({lead,onClose,onSaved}){
   async function save(){
     setBusy(true); setErr('')
     try{
-      const deal = {...f, contract_price:num(f.contract_price), emd:num(f.emd), fee:num(f.fee)}
-      await patchLead(lead, { deal })
+      const deal = {...f, inspection_end:dealOf(lead).inspection_end||null, contract_price:num(f.contract_price), emd:num(f.emd), fee:num(f.fee)}
+      await patchLead(lead, { deal }) // checklist + inspection date are saved on their own, so keep the fresh copy
       await onSaved()
     }catch(e){ setErr(/fetch/i.test(e.message)?"Can't reach the database — try again in a minute.":e.message); setBusy(false) }
   }
@@ -292,6 +323,8 @@ function DealModal({lead,onClose,onSaved}){
             </label>
           ))}
         </div>
+        <div style={{fontWeight:700,fontSize:14,marginTop:18,marginBottom:8}}>Contract to close</div>
+        <ClosingChecklist lead={lead} onSaved={onChecklist} compact/>
         <label style={{color:C.muted,fontSize:11.5,display:'block',marginTop:12}}>Notes
           <textarea value={f.notes||''} onChange={e=>setF({...f,notes:e.target.value})} rows={2} placeholder="Inspection period, contingencies, access instructions..." style={{...inp,resize:'vertical',fontFamily:'inherit'}}/>
         </label>

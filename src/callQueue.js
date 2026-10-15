@@ -39,6 +39,12 @@ export function buildQueue(leads, activity, campaignIds){
     if(cs==='overdue' || cs==='today'){ out.due.push({...item, kind:'callback', label:cs==='overdue'?'Callback overdue':'Callback today'}); continue }
     if(cs==='later'){ out.scheduled.push({...item, kind:'callback', next:new Date(cb.at).getTime(), label:'Callback set'}); continue }
     if(lastAt>=today0){ out.doneToday.push({...item, kind:'done'}); continue }
+    if(st==='nurture'){
+      // Nurtured sellers come back on their check-back date, then follow the normal retry rules from there.
+      const until = d.nurture && d.nurture.until ? new Date(d.nurture.until+'T00:00:00').getTime() : 0
+      if(until>now) { out.scheduled.push({...item, kind:'nurture', next:until, label:'Nurture check-back'}); continue }
+      if(!calls.some(a=>new Date(a.created_at).getTime()>=until)){ out.due.push({...item, kind:'nurture', label:'Nurture check-back'}); continue }
+    }
     if(!tries){ out.due.push({...item, kind:'new', label:'New'}); continue }
     if(reached){
       const next = lastAt + FOLLOW_UP_DAYS*DAY
@@ -53,7 +59,7 @@ export function buildQueue(leads, activity, campaignIds){
     else out.scheduled.push({...item, kind:'retry', next:nextDay.getTime(), label:'Try '+(tries+1)+' of '+MAX_TRIES})
   }
   // callbacks by time → people you've talked to → everyone else by score (fewer tries first on ties)
-  const order = { callback:0, followup:1, new:2, retry:2 }
+  const order = { callback:0, followup:1, nurture:1, new:2, retry:2 }
   out.due.sort((a,b)=> order[a.kind]-order[b.kind]
     || (a.kind==='callback' ? new Date(a.cb.at)-new Date(b.cb.at) : 0)
     || (b.score - a.tries*3) - (a.score - b.tries*3))

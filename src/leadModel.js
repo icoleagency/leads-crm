@@ -35,6 +35,7 @@ export function compResult(l){
 // ---------- Pipeline stages ----------
 export const STAGES = [
   ['new','New lead','#88a0b4'],
+  ['nurture','Nurture','#a78bfa'],
   ['contacted','Contacted','#4aa8ff'],
   ['appointment','Appointment','#4aa8ff'],
   ['offer','Offer made','#f5b942'],
@@ -46,6 +47,7 @@ export const STAGES = [
 export const STAGE = Object.fromEntries(STAGES.map(([k,l,c])=>[k,{k,l,c}]))
 export const stageIdx = k => STAGES.findIndex(s=>s[0]===k)
 // Days a deal can sit in a stage before it's flagged stale.
+// (Nurture sits right after New so any new call or offer moves a nurtured seller forward again.)
 export const STALE_DAYS = { new:7, contacted:10, appointment:7, offer:7, contract:30, assigned:21 }
 // Logged call outcome -> the pipeline stage it proves the lead reached.
 export const OUTCOME_STAGE = { contact:'contacted', appointment:'appointment', offer:'offer', contract:'contract', closed:'closed', dead:'dead' }

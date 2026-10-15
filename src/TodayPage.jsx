@@ -45,9 +45,9 @@ export default function TodayPage({leads,activity,team,campaigns,reload,openLead
   const slipping = []
   for(const {l,st} of withStage){
     const d = dealOf(l)
-    const ns = ['contacted','appointment','offer','contract','assigned'].includes(st) ? nextStepOf(l, activity, st) : null
+    const ns = ['contacted','appointment','offer','contract','assigned','nurture'].includes(st) ? nextStepOf(l, activity, st) : null
     if(ns && ns.kind!=='callback' && (ns.state==='overdue'||ns.state==='today')){
-      slipping.push({ l, rank:ns.state==='overdue'?0:1, tag:ns.kind==='offer_done'?'Offer follow-ups done':ns.state==='overdue'?'Next step overdue':'Next step due today', c:ns.state==='overdue'?C.red:C.amber,
+      slipping.push({ l, rank:ns.state==='overdue'?0:1, tag:ns.kind==='offer_done'?'Offer follow-ups done':ns.kind==='nurture'?'Nurture check-back':ns.kind==='checklist'?'Close checklist':ns.state==='overdue'?'Next step overdue':'Next step due today', c:ns.state==='overdue'?C.red:C.amber,
         text:ns.text+(ns.due?(ns.state==='overdue'?' — was due '+fmtDay(ns.due)+' ('+daysLate(ns.due)+'d late)':' — due today'):'')+'.' })
     }
     if(st==='offer' && !(ns && ns.kind==='offer_fu')){
@@ -56,6 +56,9 @@ export default function TodayPage({leads,activity,team,campaigns,reload,openLead
     }
     if(st==='contract' || st==='assigned'){
       const ci = daysUntil(d.closing_date)
+      const insp = daysUntil(d.inspection_end)
+      if(st==='contract' && !d.buyer && insp!==null && insp<=3 && insp>=-7)
+        slipping.push({ l, rank:0, tag:insp<0?'Inspection over, no buyer':'Inspection ending', c:C.red, text:insp<0 ? 'Inspection period ended '+fmtDay(d.inspection_end)+' and no buyer is lined up — your EMD may be at risk.' : 'Inspection period ends '+(insp===0?'today':fmtDay(d.inspection_end)+' (in '+insp+'d)')+' and there is no buyer yet. Blast it or extend.' })
       if(ci!==null && ci<0) slipping.push({ l, rank:0, tag:'Closing overdue', c:C.red, text:'Was set to close '+fmtDay(d.closing_date)+' ('+(-ci)+'d ago). Update the date or check with title.' })
       else if(st==='contract' && !d.buyer) slipping.push({ l, rank:ci!==null&&ci<=14?0:2, tag:'No buyer yet', c:ci!==null&&ci<=14?C.red:C.amber, text:ci!==null ? 'Under contract, closes '+fmtDay(d.closing_date)+' (in '+ci+'d) and no buyer is lined up.' : 'Under contract with no buyer and no closing date entered.' })
       else if(ci!==null && ci<=7) slipping.push({ l, rank:1, tag:'Closing soon', c:C.blue, text:'Closes '+fmtDay(d.closing_date)+' (in '+ci+'d)'+(d.buyer?' · buyer: '+d.buyer:'')+(d.title_company?' · '+d.title_company:'')+'.' })
