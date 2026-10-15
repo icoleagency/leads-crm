@@ -16,6 +16,7 @@ export const KIND = { sent:['Sent','#88a0b4'], interested:['Interested','#4aa8ff
 
 export function dispoErr(msg){
   const m = String(msg||'')
+  if(/profile/i.test(m) && /column|schema cache|does not exist|find/i.test(m)) return 'upgrade'
   if(/buyers|buyer_activity|schema cache|relation .* does not exist/i.test(m)) return 'setup'
   if(/failed to fetch|network/i.test(m)) return "Can't reach the database right now — give it a minute, then retry."
   return m
@@ -37,21 +38,33 @@ export function buyerRow(b){
   return { name:String(b.name||'').trim(), company:b.company||null, phone:b.phone?normPhone(b.phone)||String(b.phone).trim():null, email:b.email?String(b.email).trim().toLowerCase():null,
     buyer_type:b.buyer_type||null, markets:cleanList(b.markets), property_types:cleanList(b.property_types), min_price:num(b.min_price), max_price:num(b.max_price),
     rehab:cleanList(b.rehab), financing:b.financing||null, pof:!!b.pof, pof_date:b.pof_date||null, tags:cleanList(b.tags), notes:b.notes||null,
-    status:b.status||'active', source:b.source||null, updated_at:new Date().toISOString() }
+    status:b.status||'active', source:b.source||null, updated_at:new Date().toISOString(),
+    ...(b.profile!==undefined ? { profile:b.profile||{} } : {}) }
 }
 export function saveBuyer(b){
   const row = buyerRow(b)
   return run(b.id ? supabase.from('buyers').update(row).eq('id', b.id).select() : supabase.from('buyers').insert([row]).select())
 }
 export function deleteBuyer(id){ return run(supabase.from('buyers').delete().eq('id', id)) }
+export const nameKey = s => String(s||'').toUpperCase().replace(/&/g,' AND ').replace(/[^A-Z0-9 ]+/g,' ')
+  .replace(/\b(LLC|L L C|INC|CORP|CORPORATION|CO|LTD|LP|LLP|PLLC|THE)\b/g,' ').replace(/\s+/g,' ').trim()
 export async function importBuyers(rows, existing, onProgress=()=>{}){
   const seenPhone = new Set(existing.map(b=>normPhone(b.phone)).filter(Boolean))
   const seenEmail = new Set(existing.map(b=>(b.email||'').toLowerCase()).filter(Boolean))
-  const fresh = []; let dupes = 0
+  // Skip-traced files come back with the same names: fill in buyers that have no phone/email yet.
+  const noContact = new Map(existing.filter(b=>!b.phone || !b.email).map(b=>[nameKey(b.name), b]))
+  const fresh = []; let dupes = 0, filled = 0
   for(const r of rows){
     const row = buyerRow(r); if(!row.name) continue
     const ph = normPhone(row.phone), em = row.email
     if((ph && seenPhone.has(ph)) || (em && seenEmail.has(em))){ dupes++; continue }
+    const same = noContact.get(nameKey(row.name))
+    if(same && (ph || em)){
+      const upd = {}; if(!same.phone && row.phone) upd.phone = row.phone; if(!same.email && row.email) upd.email = row.email
+      if(Object.keys(upd).length){ await run(supabase.from('buyers').update(upd).eq('id', same.id)); filled++; noContact.delete(nameKey(row.name)) }
+      if(ph) seenPhone.add(ph); if(em) seenEmail.add(em)
+      continue
+    }
     if(ph) seenPhone.add(ph); if(em) seenEmail.add(em)
     fresh.push(row)
   }
@@ -59,7 +72,7 @@ export async function importBuyers(rows, existing, onProgress=()=>{}){
     await run(supabase.from('buyers').insert(fresh.slice(i,i+500)))
     onProgress('Importing… '+Math.min(i+500,fresh.length)+' / '+fresh.length)
   }
-  return { added:fresh.length, dupes }
+  return { added:fresh.length, dupes, filled }
 }
 
 // ---------- activity ----------
@@ -174,3 +187,39 @@ export function blastText(l, {withAddress=true}={}){
   return { sms, subject, email }
 }
 export const phoneOut = p => fmtPhone(normPhone(p)) || p || ''
+
+// ---------- buyer grade (A / B / C, plus Cold) ----------
+// Points for proof: closed with you, offers, replies, verified purchases, proof of funds, a complete buy box.
+export function buyerGrade(b, activity){
+  const p = b.profile || {}
+  const mine = activity.filter(a=>a.buyer_id===b.id)
+  const sentDeals = new Set(mine.filter(a=>a.kind==='sent').map(a=>a.lead_id))
+  const replied = new Set(mine.filter(a=>a.kind!=='sent').map(a=>a.lead_id))
+  const offers = mine.filter(a=>a.kind==='offer').length
+  const bought = mine.filter(a=>a.kind==='assigned').length
+  const why = []; let pts = 0
+  const add = (n, t) => { pts += n; why.push([n, t]) }
+  if(bought) add(Math.min(60, bought*40), 'Bought '+bought+' from you')
+  if(offers) add(Math.min(30, offers*12), offers+' offer'+(offers===1?'':'s'))
+  if(sentDeals.size>=3) add(Math.round(15*replied.size/sentDeals.size), 'Replies to '+Math.round(100*replied.size/sentDeals.size)+'% of deals')
+  else if(replied.size) add(5, 'Has replied to you')
+  if(p.verified){
+    const n12 = Number(p.buys_12mo)||0
+    add(10 + Math.min(25, n12*5), 'Verified cash buyer'+(n12?' · '+n12+' buys in 12 mo':''))
+  } else if(Number(p.deals_reported)>=3) add(8, 'Says they bought '+p.deals_reported_label)
+  if(b.pof){ const fresh = b.pof_date && (Date.now()-new Date(b.pof_date))/86400000 < 90; add(fresh?15:10, fresh?'Fresh proof of funds':'Proof of funds on file') }
+  const box = [(b.markets||[]).length, b.max_price, (b.rehab||[]).length || (b.property_types||[]).length].filter(Boolean).length
+  if(box===3) add(5, 'Complete buy box')
+  if(p.close_days && Number(p.close_days)<=14) add(5, 'Closes in '+p.close_days+' days')
+  const last = mine.find(a=>a.kind!=='sent')
+  if(last && (Date.now()-new Date(last.created_at))/86400000 < 60) add(5, 'Active in the last 60 days')
+  const cold = !bought && sentDeals.size>=5 && replied.size===0
+  if(cold) add(-20, 'Ignored '+sentDeals.size+' deals in a row')
+  let grade = pts>=50 ? 'A' : pts>=25 ? 'B' : 'C'
+  if(p.vip) grade = 'A'
+  if(cold && !p.vip) grade = 'Cold'
+  return { grade, pts, why, cold, sent:sentDeals.size, replied:replied.size, offers, bought, vip:!!p.vip }
+}
+export const GRADE_COLOR = { A:'#3fd08a', B:'#4aa8ff', C:'#88a0b4', Cold:'#e5573f' }
+export const GRADE_RANK = { A:0, B:1, C:2, Cold:3 }
+export const VIP_HOURS = 24

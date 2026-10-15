@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { stageOf, STAGE, moveStage, patchLead, money } from './leadModel'
 import { parseCsv } from './stacking'
 import { BUYER_TYPES, PROP_TYPES, REHAB_LEVELS, RESPONSES, KIND, dispoErr, fetchBuyers, saveBuyer, deleteBuyer, importBuyers,
-  fetchBuyerActivity, logBuyer, logBlast, dealStatus, buyerRecord, dispoOf, dealOf, dealNumbers, rehabLevel, matchesFor, blastText, phoneOut } from './dispo'
+  fetchBuyerActivity, logBuyer, logBlast, dealStatus, buyerRecord, dispoOf, dealOf, dealNumbers, rehabLevel, matchesFor, blastText, phoneOut,
+  buyerGrade, GRADE_RANK, VIP_HOURS } from './dispo'
+import { FindBuyers, SignupLink, GradeBadge } from './BuyerTools'
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -15,7 +17,7 @@ const inp = {background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:
 const btn = (p,dis) => ({background:p?C.orange:'transparent',color:p?C.ink:C.muted,border:'1px solid '+(p?C.orange:C.line),borderRadius:8,padding:'7px 12px',fontSize:12,fontWeight:700,cursor:dis?'default':'pointer',opacity:dis?0.5:1,whiteSpace:'nowrap'})
 const chip = (on,col=C.orange) => ({background:on?col:'transparent',color:on?C.ink:C.muted,border:'1px solid '+(on?col:C.line),borderRadius:14,padding:'4px 10px',fontSize:11.5,fontWeight:600,cursor:'pointer'})
 const Tag = ({c,children}) => <span style={{background:c+'1e',color:c,border:'1px solid '+c+'55',borderRadius:6,padding:'1px 7px',fontSize:10.5,fontWeight:700,whiteSpace:'nowrap'}}>{children}</span>
-const errText = e => { const m = dispoErr(e.message); return m==='setup' ? 'Buyers need a one-time database update — run supabase/add-dispo.sql in Supabase.' : m }
+const errText = e => { const m = dispoErr(e.message); return m==='upgrade' ? 'Buyer profiles need a one-time database update — run supabase/add-buyer-tools.sql in Supabase.' : m==='setup' ? 'Buyers need a one-time database update — run supabase/add-dispo.sql in Supabase.' : m }
 const DEAL_STAGES = ['contract','assigned']
 const daysUntil = s => { if(!s) return null; const d=new Date(s+'T12:00:00'); return isNaN(d)?null:Math.ceil((d.getTime()-Date.now())/86400000) }
 const fmtDay = s => { const d=new Date(s+'T12:00:00'); return isNaN(d)?s:d.toLocaleDateString([], {month:'short',day:'numeric'}) }
@@ -33,6 +35,8 @@ export default function DispoPage({leads,activity,reloadLeads,openLead,initialDe
     setLoaded(true)
   },[])
   useEffect(()=>{ load() },[load])
+  const grades = useMemo(()=>Object.fromEntries(buyers.map(b=>[b.id, buyerGrade(b, bact)])),[buyers,bact])
+  const needsUpgrade = buyers.length>0 && !('profile' in buyers[0])
 
   const h1 = {fontFamily:'Georgia,serif',fontSize:isMobile?22:27,margin:0,fontWeight:600}
   if(err==='setup') return (
@@ -57,8 +61,14 @@ export default function DispoPage({leads,activity,reloadLeads,openLead,initialDe
         </div>
       </div>
       {err && <div style={{...card,marginTop:14,borderColor:C.red+'66',color:C.red,fontSize:13}}>{err} <button onClick={load} style={{...btn(false),marginLeft:8}}>Retry</button></div>}
-      {loaded && tab==='deals' && <Deals leads={leads} activity={activity} buyers={buyers} bact={bact} reload={load} reloadLeads={reloadLeads} openLead={openLead} initialDeal={initialDeal} goBuyers={()=>setTab('buyers')} isMobile={isMobile}/>}
-      {loaded && tab==='buyers' && <Buyers buyers={buyers} bact={bact} leads={leads} reload={load} isMobile={isMobile}/>}
+      {needsUpgrade && <div style={{...card,marginTop:14,borderColor:C.amber+'66'}}>
+        <div style={{color:C.amber,fontWeight:700,fontSize:14,marginBottom:6}}>One quick database update for the new buyer tools</div>
+        <div style={{color:C.cream,fontSize:13,lineHeight:1.6}}>Buyer grades work now, but the Cash Buyer Finder and sign-up details need one new column. In Supabase open <b>SQL Editor → + New query</b>, paste this, and hit <b>Run</b>:</div>
+        <pre style={{background:C.ink,border:'1px solid '+C.line,borderRadius:8,padding:'10px 12px',fontSize:12,color:C.cream,whiteSpace:'pre-wrap',marginTop:8}}>{"alter table public.buyers add column if not exists profile jsonb not null default '{}'::jsonb;\nnotify pgrst, 'reload schema';"}</pre>
+        <button onClick={load} style={{...btn(true),marginTop:4}}>I ran it — reload</button>
+      </div>}
+      {loaded && tab==='deals' && <Deals grades={grades} leads={leads} activity={activity} buyers={buyers} bact={bact} reload={load} reloadLeads={reloadLeads} openLead={openLead} initialDeal={initialDeal} goBuyers={()=>setTab('buyers')} isMobile={isMobile}/>}
+      {loaded && tab==='buyers' && <Buyers grades={grades} buyers={buyers} bact={bact} leads={leads} reload={load} isMobile={isMobile}/>}
     </div>
   )
 }
@@ -66,7 +76,7 @@ export default function DispoPage({leads,activity,reloadLeads,openLead,initialDe
 // =====================================================================
 // DEALS
 // =====================================================================
-function Deals({leads,activity,buyers,bact,reload,reloadLeads,openLead,initialDeal,goBuyers,isMobile}){
+function Deals({grades,leads,activity,buyers,bact,reload,reloadLeads,openLead,initialDeal,goBuyers,isMobile}){
   const [showClosed,setShowClosed] = useState(false)
   const deals = leads.map(l=>({l, st:stageOf(l,activity)})).filter(x=>DEAL_STAGES.includes(x.st) || (showClosed && x.st==='closed'))
     .sort((a,b)=>(daysUntil(dealOf(a.l).closing_date)??999)-(daysUntil(dealOf(b.l).closing_date)??999))
@@ -100,18 +110,20 @@ function Deals({leads,activity,buyers,bact,reload,reloadLeads,openLead,initialDe
           ) })}
         <label style={{display:'flex',gap:6,alignItems:'center',color:C.muted,fontSize:12,padding:'6px',cursor:'pointer'}}><input type="checkbox" checked={showClosed} onChange={e=>setShowClosed(e.target.checked)}/>Show closed deals</label>
       </div>
-      {sel && <DealDispo key={sel.l.id} lead={sel.l} st={sel.st} buyers={buyers} bact={bact} reload={reload} reloadLeads={reloadLeads} openLead={openLead} goBuyers={goBuyers} isMobile={isMobile}/>}
+      {sel && <DealDispo key={sel.l.id} grades={grades} lead={sel.l} st={sel.st} buyers={buyers} bact={bact} reload={reload} reloadLeads={reloadLeads} openLead={openLead} goBuyers={goBuyers} isMobile={isMobile}/>}
     </div>
   )
 }
 
-function DealDispo({lead,st,buyers,bact,reload,reloadLeads,openLead,goBuyers,isMobile}){
+function DealDispo({grades,lead,st,buyers,bact,reload,reloadLeads,openLead,goBuyers,isMobile}){
   const n = dealNumbers(lead), dp = dispoOf(lead), dl = dealOf(lead)
   const [editing,setEditing] = useState(!dp.asking && !dl.contract_price)
   const [msg,setMsg] = useState(null)
   const [busy,setBusy] = useState(false)
   const status = dealStatus(bact, lead.id)
-  const matched = matchesFor(buyers, lead)
+  // Best buyers first: grade, then how well the buy box fits.
+  const G = id => grades[id] || { grade:'C', pts:0 }
+  const matched = matchesFor(buyers, lead).sort((a,b)=>GRADE_RANK[G(a.b.id).grade]-GRADE_RANK[G(b.b.id).grade] || b.m.score-a.m.score)
   const matchedIds = new Set(matched.map(x=>x.b.id))
   const extra = buyers.filter(b=>status[b.id] && !matchedIds.has(b.id)).map(b=>({b, m:null}))
   const offers = Object.entries(status).filter(([,s])=>s.kind==='offer'||s.kind==='assigned').map(([id,s])=>({b:buyers.find(x=>String(x.id)===String(id)), s})).filter(x=>x.b).sort((a,b)=>(b.s.amount||0)-(a.s.amount||0))
@@ -151,7 +163,7 @@ function DealDispo({lead,st,buyers,bact,reload,reloadLeads,openLead,goBuyers,isM
         {editing && <DealSheetForm lead={lead} n={n} onSaved={async ()=>{ setEditing(false); await reloadLeads() }}/>}
       </div>
 
-      <Blast lead={lead} matched={matched} status={status} reload={reload} goBuyers={goBuyers} isMobile={isMobile}/>
+      <Blast grades={grades} lead={lead} matched={matched} status={status} reload={reload} reloadLeads={reloadLeads} goBuyers={goBuyers} isMobile={isMobile}/>
 
       {offers.length>0 &&
       <div style={{...card,borderColor:C.green+'55'}}>
@@ -167,7 +179,7 @@ function DealDispo({lead,st,buyers,bact,reload,reloadLeads,openLead,goBuyers,isM
           </div> })}
       </div>}
 
-      <BuyerResponses lead={lead} list={[...matched, ...extra]} buyers={buyers} status={status} reload={reload} goBuyers={goBuyers} isMobile={isMobile}/>
+      <BuyerResponses grades={grades} lead={lead} list={[...matched, ...extra]} buyers={buyers} status={status} reload={reload} goBuyers={goBuyers} isMobile={isMobile}/>
     </div>
   )
 }
@@ -205,14 +217,23 @@ function DealSheetForm({lead,n,onSaved}){
   )
 }
 
-function Blast({lead,matched,status,reload,goBuyers,isMobile}){
+function Blast({grades,lead,matched,status,reload,reloadLeads,goBuyers,isMobile}){
   const [withAddr,setWithAddr] = useState(true)
   const t = blastText(lead, {withAddress:withAddr})
   const [sms,setSms] = useState(t.sms); const [subject,setSubject] = useState(t.subject); const [email,setEmail] = useState(t.email)
   const [onlyNew,setOnlyNew] = useState(true)
   const [msg,setMsg] = useState(null); const [busy,setBusy] = useState(false)
   useEffect(()=>{ const x = blastText(lead,{withAddress:withAddr}); setSms(x.sms); setSubject(x.subject); setEmail(x.email) },[withAddr, lead])
-  const targets = matched.filter(x=>!onlyNew || !status[x.b.id]).map(x=>x.b)
+  // VIP first look: A-buyers get the deal first; everyone else after the window.
+  const vipAt = dispoOf(lead).vip_at ? new Date(dispoOf(lead).vip_at).getTime() : null
+  const vipEnds = vipAt ? vipAt + VIP_HOURS*3600000 : null
+  const vipOpen = vipEnds && vipEnds > Date.now()
+  const isA = x => (grades[x.b.id]||{}).grade==='A'
+  const aCount = matched.filter(isA).length
+  const [audience,setAudience] = useState(()=> !vipAt && aCount>0 ? 'vip' : 'all')
+  const pool = audience==='vip' ? matched.filter(isA) : matched.filter(x=>(grades[x.b.id]||{}).grade!=='Cold' || audience==='every')
+  const targets = pool.filter(x=>!onlyNew || !status[x.b.id]).map(x=>x.b)
+  const coldCount = matched.filter(x=>(grades[x.b.id]||{}).grade==='Cold').length
   const emails = targets.map(b=>b.email).filter(Boolean)
   const phones = targets.filter(b=>b.phone)
   const mailto = 'mailto:?bcc='+encodeURIComponent(emails.join(','))+'&subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(email)
@@ -226,7 +247,14 @@ function Blast({lead,matched,status,reload,goBuyers,isMobile}){
   async function markSent(){
     if(!targets.length) return
     setBusy(true)
-    try{ await logBlast(targets.map(b=>b.id), lead.id, 'Deal blast'); await patchLead(lead, { dispo:{...dispoOf(lead), blasted_at:new Date().toISOString(), blast_count:(dispoOf(lead).blast_count||0)+targets.length} }); await reload(); flash('Logged as sent to '+targets.length+' buyers.') }
+    try{
+      const vip = audience==='vip'
+      await logBlast(targets.map(b=>b.id), lead.id, vip?'VIP first look':'Deal blast')
+      await patchLead(lead, { dispo:{...dispoOf(lead), blasted_at:new Date().toISOString(), blast_count:(dispoOf(lead).blast_count||0)+targets.length, ...(vip && !vipAt ? { vip_at:new Date().toISOString() } : {})} })
+      await Promise.all([reload(), reloadLeads && reloadLeads()])
+      flash(vip ? 'VIP first look sent to '+targets.length+' A-buyers. Send to everyone after '+new Date(Date.now()+VIP_HOURS*3600000).toLocaleString([], {weekday:'short',hour:'numeric',minute:'2-digit'})+'.' : 'Logged as sent to '+targets.length+' buyers.')
+      if(vip) setAudience('all')
+    }
     catch(e){ flash(errText(e)) }
     setBusy(false)
   }
@@ -246,6 +274,13 @@ function Blast({lead,matched,status,reload,goBuyers,isMobile}){
           <label style={{display:'flex',gap:5,alignItems:'center',cursor:'pointer'}}><input type="checkbox" checked={withAddr} onChange={e=>setWithAddr(e.target.checked)}/>Include street address</label>
         </div>
       </div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginTop:10}}>
+        <button onClick={()=>setAudience('vip')} style={chip(audience==='vip',C.green)}>★ VIP first look — A-buyers ({aCount})</button>
+        <button onClick={()=>setAudience('all')} style={chip(audience==='all')}>Everyone{coldCount?' except cold':''} ({matched.length-coldCount})</button>
+        {coldCount>0 && <button onClick={()=>setAudience('every')} style={chip(audience==='every',C.muted)}>Include {coldCount} cold</button>}
+      </div>
+      {audience==='vip' && <div style={{fontSize:12,color:C.muted,marginTop:6,lineHeight:1.5}}>{aCount ? 'Your best buyers see it first. Give them '+VIP_HOURS+' hours, then send to everyone — it rewards the buyers who close and makes them answer faster.' : 'No A-buyers match this deal yet. Buyers become A by closing with you, making offers, verified purchases or proof of funds — or mark one VIP on the Buyers tab.'}</div>}
+      {vipAt && <div style={{fontSize:12,marginTop:6,color:vipOpen?C.amber:C.green,fontWeight:600}}>{vipOpen ? '★ VIP window open — ends '+new Date(vipEnds).toLocaleString([], {weekday:'short',hour:'numeric',minute:'2-digit'})+'. Hold the full blast until then.' : '★ VIP window over — send it to everyone.'}</div>}
       <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'1fr 1.3fr',gap:10,marginTop:10}}>
         <div>
           <div style={{...cap,marginBottom:4}}>Text message</div>
@@ -268,14 +303,14 @@ function Blast({lead,matched,status,reload,goBuyers,isMobile}){
       </div>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,marginTop:12,paddingTop:10,borderTop:'1px solid '+C.line,flexWrap:'wrap'}}>
         <span style={{color:C.muted,fontSize:12}}>{dispoOf(lead).blasted_at?'Last sent '+new Date(dispoOf(lead).blasted_at).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})+'. ':''}After you send it, log it so you can track who's seen the deal.</span>
-        <button disabled={busy||!targets.length} onClick={markSent} style={btn(true,busy||!targets.length)}>Mark sent to {targets.length}</button>
+        <button disabled={busy||!targets.length} onClick={markSent} style={btn(true,busy||!targets.length)}>{audience==='vip'?'Mark VIP sent to ':'Mark sent to '}{targets.length}</button>
       </div>
       {msg && <div style={{color:C.green,fontSize:12.5,marginTop:8}}>{msg}</div>}
     </div>
   )
 }
 
-function BuyerResponses({lead,list,buyers,status,reload,goBuyers,isMobile}){
+function BuyerResponses({grades,lead,list,buyers,status,reload,goBuyers,isMobile}){
   const [offerFor,setOfferFor] = useState(null)
   const [amount,setAmount] = useState('')
   const [note,setNote] = useState('')
@@ -295,7 +330,7 @@ function BuyerResponses({lead,list,buyers,status,reload,goBuyers,isMobile}){
   return (
     <div style={card}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:6}}>
-        <div style={{fontWeight:700,fontSize:14}}>Buyers for this deal <span style={{color:C.muted,fontWeight:400,fontSize:12}}>— best match first</span></div>
+        <div style={{fontWeight:700,fontSize:14}}>Buyers for this deal <span style={{color:C.muted,fontWeight:400,fontSize:12}}>— best buyers first</span></div>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Find any buyer who called in…" style={{...inp,width:isMobile?'100%':240,fontSize:12.5,padding:'6px 9px'}}/>
       </div>
       {rows.length===0 && <div style={{color:C.muted,fontSize:13}}>No matching buyers. <span onClick={goBuyers} style={{color:C.orange,cursor:'pointer'}}>Add buyers →</span></div>}
@@ -304,7 +339,7 @@ function BuyerResponses({lead,list,buyers,status,reload,goBuyers,isMobile}){
           <div key={b.id} style={{padding:'9px 0',borderTop:'1px solid '+C.line}}>
             <div style={{display:'flex',justifyContent:'space-between',gap:10,alignItems:'flex-start',flexWrap:isMobile?'wrap':'nowrap'}}>
               <div style={{minWidth:0}}>
-                <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><b style={{fontSize:13.5}}>{b.name}</b>{b.company && <span style={{color:C.muted,fontSize:12}}>{b.company}</span>}{k && <Tag c={k[1]}>{k[0]}{s.amount?' '+money(s.amount):''}</Tag>}{!m && <Tag c={C.muted}>not a match</Tag>}</div>
+                <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>{grades[b.id] && <GradeBadge g={grades[b.id]} small/>}<b style={{fontSize:13.5}}>{b.name}</b>{b.company && <span style={{color:C.muted,fontSize:12}}>{b.company}</span>}{k && <Tag c={k[1]}>{k[0]}{s.amount?' '+money(s.amount):''}</Tag>}{!m && <Tag c={C.muted}>not a match</Tag>}</div>
                 <div style={{fontSize:12,marginTop:2}}>{b.phone && <a href={'tel:'+String(b.phone).replace(/[^\d+]/g,'')} style={{color:C.green,textDecoration:'none',marginRight:8}}>{phoneOut(b.phone)}</a>}{b.email && <span style={{color:C.muted}}>{b.email}</span>}</div>
                 {m && <div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:4}}>{m.reasons.map(([key,t,ok])=><span key={key} style={{fontSize:10.5,color:ok?C.green:C.amber}}>{ok?'✓':'!'} {t}</span>)}</div>}
               </div>
@@ -331,25 +366,34 @@ function BuyerResponses({lead,list,buyers,status,reload,goBuyers,isMobile}){
 const BLANK_BUYER = { name:'', company:'', phone:'', email:'', buyer_type:'Flipper', markets:'', property_types:['Single family'], min_price:'', max_price:'', rehab:[], financing:'Cash', pof:false, pof_date:'', tags:'', notes:'', status:'active', source:'' }
 const FINANCING = ['Cash','Hard money','Private money','Conventional']
 
-function Buyers({buyers,bact,leads,reload,isMobile}){
+function Buyers({grades,buyers,bact,leads,reload,isMobile}){
   const [q,setQ] = useState('')
   const [mkt,setMkt] = useState('')
   const [type,setType] = useState('')
   const [pofOnly,setPofOnly] = useState(false)
   const [edit,setEdit] = useState(null)        // buyer object or BLANK
   const [showImport,setShowImport] = useState(false)
+  const [panel,setPanel] = useState(null)       // 'find' | 'signup'
+  const [grade,setGrade] = useState('')
   const [limit,setLimit] = useState(100)
+  const G = id => grades[id] || { grade:'C', pts:0, why:[] }
+  const week = Date.now()-7*86400000
+  const isNew = b => b.profile && b.profile.signup_at && new Date(b.profile.signup_at).getTime()>=week
+  async function setVip(b, on){ try{ await saveBuyer({ ...b, profile:{ ...(b.profile||{}), vip:on } }); await reload() }catch(e){ alert(errText(e)) } }
   const markets = [...new Set(buyers.flatMap(b=>b.markets||[]))].sort((a,b)=>a.localeCompare(b))
   const s = q.trim().toLowerCase()
   const list = buyers.filter(b=>(!s || [b.name,b.company,b.phone,b.email,(b.tags||[]).join(' ')].some(v=>String(v||'').toLowerCase().includes(s)))
-    && (!mkt || (b.markets||[]).includes(mkt)) && (!type || b.buyer_type===type) && (!pofOnly || b.pof))
+    && (!mkt || (b.markets||[]).includes(mkt)) && (!type || b.buyer_type===type) && (!pofOnly || b.pof)
+    && (!grade || (grade==='verified' ? b.profile&&b.profile.verified : grade==='signup' ? b.profile&&b.profile.signup : grade==='landlord' ? b.profile&&b.profile.landlord : G(b.id).grade===grade)))
+    .sort((a,b)=>GRADE_RANK[G(a.id).grade]-GRADE_RANK[G(b.id).grade] || G(b.id).pts-G(a.id).pts || String(a.name).localeCompare(String(b.name)))
+  const count = g => buyers.filter(b=>G(b.id).grade===g).length
   const withPof = buyers.filter(b=>b.pof).length
   const leadName = id => (leads.find(l=>String(l.id)===String(id))||{}).address
   return (
     <div style={{marginTop:16}}>
       <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(4,1fr)',gap:10}}>
-        {[['Buyers',buyers.length],['With proof of funds',withPof],['Active',buyers.filter(b=>b.status!=='dnc').length],['Bought from you',new Set(bact.filter(a=>a.kind==='assigned').map(a=>a.buyer_id)).size]]
-          .map(([l,v])=><div key={l} style={{...card,padding:'12px 14px'}}><div style={cap}>{l}</div><div style={{fontSize:22,fontWeight:700,fontFamily:'Georgia,serif',marginTop:3}}>{v.toLocaleString()}</div></div>)}
+        {[['Buyers',buyers.length,withPof+' with proof of funds',C.cream],['A-buyers',count('A'),'your first-look list',C.green],['Verified cash buyers',buyers.filter(b=>b.profile&&b.profile.verified).length,'from real purchases',C.cream],['New sign-ups',buyers.filter(isNew).length,'last 7 days',C.blue]]
+          .map(([l,v,sub,c])=><div key={l} style={{...card,padding:'12px 14px'}}><div style={cap}>{l}</div><div style={{fontSize:22,fontWeight:700,fontFamily:'Georgia,serif',marginTop:3,color:c}}>{v.toLocaleString()}</div><div style={{color:C.muted,fontSize:11}}>{sub}</div></div>)}
       </div>
       <div style={{...card,marginTop:12,padding:14}}>
         <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
@@ -357,10 +401,20 @@ function Buyers({buyers,bact,leads,reload,isMobile}){
           <select value={mkt} onChange={e=>setMkt(e.target.value)} style={{...inp,flex:1,minWidth:130}}><option value="">All markets</option>{markets.map(m=><option key={m}>{m}</option>)}</select>
           <select value={type} onChange={e=>setType(e.target.value)} style={{...inp,flex:1,minWidth:130}}><option value="">All buyer types</option>{BUYER_TYPES.map(t=><option key={t}>{t}</option>)}</select>
           <label style={{display:'flex',gap:6,alignItems:'center',color:C.muted,fontSize:12.5,cursor:'pointer'}}><input type="checkbox" checked={pofOnly} onChange={e=>setPofOnly(e.target.checked)}/>Proof of funds</label>
-          <button onClick={()=>{ setEdit({...BLANK_BUYER}); setShowImport(false) }} style={btn(true)}>+ Add buyer</button>
-          <button onClick={()=>{ setShowImport(!showImport); setEdit(null) }} style={btn(false)}>Import CSV</button>
+          <button onClick={()=>{ setEdit({...BLANK_BUYER}); setShowImport(false); setPanel(null) }} style={btn(false)}>+ Add buyer</button>
+          <button onClick={()=>{ setShowImport(!showImport); setEdit(null); setPanel(null) }} style={btn(false)}>Import CSV</button>
+          <button onClick={()=>{ setPanel(panel==='find'?null:'find'); setShowImport(false); setEdit(null) }} style={{...btn(true),background:C.green,borderColor:C.green}}>Find cash buyers</button>
+          <button onClick={()=>{ setPanel(panel==='signup'?null:'signup'); setShowImport(false); setEdit(null) }} style={{...btn(true),background:C.blue,borderColor:C.blue}}>Sign-up link</button>
+        </div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:10,alignItems:'center'}}>
+          <span style={{color:C.muted,fontSize:11.5}}>Show</span>
+          {[['','All'],['A','A ('+count('A')+')'],['B','B ('+count('B')+')'],['C','C ('+count('C')+')'],['Cold','Cold ('+count('Cold')+')'],['verified','Verified buyers'],['landlord','Landlords'],['signup','Signed up']].map(([k,l])=>
+            <button key={k} onClick={()=>setGrade(k)} style={chip(grade===k, k==='A'?C.green:k==='Cold'?C.red:C.orange)}>{l}</button>)}
+          <span style={{color:C.muted,fontSize:11,marginLeft:'auto'}}>Grades update from deals sent, replies, offers, purchases and proof of funds · hover a grade for why</span>
         </div>
       </div>
+      {panel==='find' && <FindBuyers buyers={buyers} reload={reload} onDone={()=>setPanel(null)} isMobile={isMobile}/>}
+      {panel==='signup' && <SignupLink buyers={buyers} leads={leads} onDone={()=>setPanel(null)} isMobile={isMobile}/>}
       {showImport && <BuyerImport buyers={buyers} reload={reload} onDone={()=>setShowImport(false)} isMobile={isMobile}/>}
       {edit && !edit.id && <BuyerForm b={edit} reload={reload} onDone={()=>setEdit(null)} isMobile={isMobile}/>}
       <div style={{...card,marginTop:12,padding:0,overflow:'hidden'}}>
@@ -370,7 +424,7 @@ function Buyers({buyers,bact,leads,reload,isMobile}){
             <div key={b.id} style={{borderTop:'1px solid '+C.line,background:open?C.panel2:'transparent'}}>
               <div onClick={()=>setEdit(open?null:b)} style={{padding:'11px 16px',cursor:'pointer',display:isMobile?'block':'grid',gridTemplateColumns:'1.3fr 1.2fr 1fr .9fr',gap:12,alignItems:'center'}}>
                 <div style={{minWidth:0}}>
-                  <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><b style={{fontSize:13.5}}>{b.name}</b>{b.pof && <Tag c={C.green}>POF</Tag>}{b.status==='dnc' && <Tag c={C.red}>Do not contact</Tag>}{(b.tags||[]).map(t=><Tag key={t} c={C.blue}>{t}</Tag>)}</div>
+                  <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><GradeBadge g={G(b.id)}/><b style={{fontSize:13.5}}>{b.name}</b>{b.pof && <Tag c={C.green}>POF</Tag>}{b.profile&&b.profile.verified && <Tag c={C.green}>✓ Verified · {b.profile.buys} buy{b.profile.buys===1?'':'s'}</Tag>}{b.profile&&b.profile.landlord && <Tag c={C.amber}>Owns {b.profile.owned}</Tag>}{isNew(b) && <Tag c={C.blue}>New sign-up</Tag>}{b.status==='dnc' && <Tag c={C.red}>Do not contact</Tag>}{(b.tags||[]).map(t=><Tag key={t} c={C.blue}>{t}</Tag>)}</div>
                   <div style={{color:C.muted,fontSize:12}}>{[b.company,b.buyer_type].filter(Boolean).join(' · ')}</div>
                 </div>
                 <div style={{fontSize:12,minWidth:0,marginTop:isMobile?4:0}}>
@@ -381,6 +435,7 @@ function Buyers({buyers,bact,leads,reload,isMobile}){
                 <div style={{fontSize:12,textAlign:isMobile?'left':'right',color:C.muted,marginTop:isMobile?4:0}}>{r.deals?<>{r.deals} deal{r.deals===1?'':'s'} sent · {r.offers} offer{r.offers===1?'':'s'}{r.bought?<div style={{color:C.orange,fontWeight:700}}>Bought {r.bought}</div>:null}</>:'No deals sent yet'}</div>
               </div>
               {open && <div style={{padding:'0 16px 14px'}}>
+                <BuyerInsight b={b} g={G(b.id)} onVip={on=>setVip(b,on)}/>
                 {r.deals>0 && <div style={{fontSize:12,color:C.muted,marginBottom:8}}>History: {[...new Set(bact.filter(a=>a.buyer_id===b.id).map(a=>a.lead_id))].map(id=>{ const last = bact.find(a=>a.buyer_id===b.id && a.lead_id===id); return (leadName(id)||'deal')+' — '+(KIND[last.kind]?.[0]||last.kind)+(last.amount?' '+money(last.amount):'') }).join(' · ')}</div>}
                 <BuyerForm b={b} reload={reload} onDone={()=>setEdit(null)} isMobile={isMobile}/>
               </div>}
@@ -388,6 +443,42 @@ function Buyers({buyers,bact,leads,reload,isMobile}){
           ) })}
         {list.length>limit && <div style={{padding:12,textAlign:'center'}}><button onClick={()=>setLimit(limit+200)} style={btn(false)}>Show more ({(list.length-limit).toLocaleString()} left)</button></div>}
       </div>
+    </div>
+  )
+}
+
+function BuyerInsight({b,g,onVip}){
+  const p = b.profile || {}
+  const [vip,setVipLocal] = useState(!!p.vip)
+  return (
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(240px,1fr))',gap:10,marginBottom:10}}>
+      <div style={{background:C.ink,borderRadius:10,padding:'10px 12px'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
+          <div style={{fontSize:12.5,fontWeight:700}}>Grade <GradeBadge g={g}/> <span style={{color:C.muted,fontWeight:400}}>{g.pts} pts</span></div>
+          <label style={{display:'flex',gap:5,alignItems:'center',fontSize:12,color:vip?C.green:C.muted,cursor:'pointer'}}><input type="checkbox" checked={vip} onChange={e=>{ setVipLocal(e.target.checked); onVip(e.target.checked) }}/>★ VIP (always A)</label>
+        </div>
+        {g.why.length ? g.why.map(([n,t],i)=><div key={i} style={{fontSize:12,color:n<0?C.red:C.cream,marginTop:3}}><span style={{color:n<0?C.red:C.green,fontWeight:700,display:'inline-block',width:34}}>{n>0?'+':''}{n}</span>{t}</div>)
+          : <div style={{fontSize:12,color:C.muted,marginTop:4}}>No track record yet — send them deals, log replies and offers, or get proof of funds.</div>}
+        <div style={{fontSize:11,color:C.muted,marginTop:6}}>A = 50+ · B = 25+ · Cold = ignored 5+ deals</div>
+      </div>
+      {(p.verified || p.landlord) && <div style={{background:C.ink,borderRadius:10,padding:'10px 12px',minWidth:0}}>
+        <div style={{fontSize:12.5,fontWeight:700}}>{p.verified ? 'Purchases on record ('+p.buys+')' : 'Owns '+p.owned+' properties in your lists'}{p.last_buy?<span style={{color:C.muted,fontWeight:400}}> · last {p.last_buy}</span>:null}</div>
+        {p.mailing && <div style={{fontSize:11.5,color:C.muted,marginTop:2}}>Mailing: {p.mailing}</div>}
+        <div style={{maxHeight:130,overflowY:'auto',marginTop:4}}>
+          {(p.purchases||p.holdings||[]).slice(0,12).map((x,i)=><div key={i} style={{fontSize:11.5,color:C.cream,padding:'2px 0'}}>{x.address}{x.city?', '+x.city:''}{x.price?<span style={{color:C.green}}> · {money(x.price)}</span>:null}{x.date?<span style={{color:C.muted}}> · {x.date}</span>:null}</div>)}
+        </div>
+        {(p.phones||[]).length>1 && <div style={{fontSize:11.5,color:C.muted,marginTop:4}}>Other phones: {p.phones.slice(1,4).map(phoneOut).join(', ')}</div>}
+      </div>}
+      {p.signup && <div style={{background:C.ink,borderRadius:10,padding:'10px 12px'}}>
+        <div style={{fontSize:12.5,fontWeight:700}}>Signed up {p.signup_at?new Date(p.signup_at).toLocaleDateString([], {month:'short',day:'numeric'}):''}{p.signup_source?<span style={{color:C.muted,fontWeight:400}}> · via {p.signup_source}</span>:null}</div>
+        <div style={{fontSize:12,color:C.cream,marginTop:4,lineHeight:1.6}}>
+          {p.deals_reported_label && <div>{p.deals_reported_label}</div>}
+          {p.close_days && <div>Can close in {p.close_days} days</div>}
+          {p.pof_ready && <div style={{color:C.green}}>Says they can send proof of funds — ask for it</div>}
+          {p.wants && <div style={{color:C.muted}}>"{p.wants}"</div>}
+          {p.sms_ok===false && <div style={{color:C.amber}}>Prefers email over text</div>}
+        </div>
+      </div>}
     </div>
   )
 }
@@ -477,7 +568,7 @@ function BuyerImport({buyers,reload,onDone,isMobile}){
       markets:(g('markets')||defMarkets).split(/[,;|]/), min_price:g('min'), max_price:g('max'), buyer_type:g('type')||defType, notes:g('notes'), source:'CSV import' } }).filter(r=>r.name) : []
   async function go(){
     setBusy(true); setMsg({ok:true,t:'Importing…'})
-    try{ const r = await importBuyers(rows, buyers, t=>setMsg({ok:true,t})); await reload(); setMsg({ok:true,t:'Added '+r.added+' buyers'+(r.dupes?' · skipped '+r.dupes+' already on your list (same phone or email)':'')+'.'}); setParsed(null) }
+    try{ const r = await importBuyers(rows, buyers, t=>setMsg({ok:true,t})); await reload(); setMsg({ok:true,t:'Added '+r.added+' buyers'+(r.filled?' · filled in phones/emails on '+r.filled+' buyers you already had':'')+(r.dupes?' · skipped '+r.dupes+' already on your list (same phone or email)':'')+'.'}); setParsed(null) }
     catch(e){ setMsg({ok:false,t:errText(e)}) }
     setBusy(false)
   }
