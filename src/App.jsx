@@ -157,7 +157,7 @@ export default function App(){
           {view==='academy' && <AcademyPage isMobile={isMobile}/>}
           {view==='today' && <TodayPage leads={leads} activity={activity} team={team} campaigns={campaigns} reload={reloadAll} openLead={openLead} goTo={go} openDispo={openDispo} isMobile={isMobile}/>}
           {view==='dispo' && <DispoPage key={dispoId||'all'} leads={leads} activity={activity} reloadLeads={reloadQuiet} openLead={openLead} initialDeal={dispoId} isMobile={isMobile}/>}
-          {view==='kpis' && <KpiPage leads={leads} campaigns={campaigns} activity={activity} actErr={actErr} reload={loadActivity} isMobile={isMobile} goTo={go}/>}
+          {view==='kpis' && <KpiPage leads={leads} campaigns={campaigns} team={team} activity={activity} actErr={actErr} reload={loadActivity} isMobile={isMobile} goTo={go}/>}
           {view==='pipeline' && <Pipeline leads={leads} activity={activity} reload={reloadQuiet} openLead={openLead} analyze={analyzeLead} isMobile={isMobile}/>}
         </div>
       </div>
