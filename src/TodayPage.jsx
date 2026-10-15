@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { nextStepOf, daysLate } from './deals'
 import { STAGE, STALE_DAYS, stageOf, stageSince, daysSince, patchLead, money, callbackOf, callbackState, fmtWhen } from './leadModel'
 import { campaignOf, openHandoff } from './team'
 import { fetchReports, localDate, liveStatus, dayStats, agoText } from './vaTools'
@@ -44,7 +45,12 @@ export default function TodayPage({leads,activity,team,campaigns,reload,openLead
   const slipping = []
   for(const {l,st} of withStage){
     const d = dealOf(l)
-    if(st==='offer'){
+    const ns = ['contacted','appointment','offer','contract','assigned'].includes(st) ? nextStepOf(l, activity, st) : null
+    if(ns && ns.kind!=='callback' && (ns.state==='overdue'||ns.state==='today')){
+      slipping.push({ l, rank:ns.state==='overdue'?0:1, tag:ns.kind==='offer_done'?'Offer follow-ups done':ns.state==='overdue'?'Next step overdue':'Next step due today', c:ns.state==='overdue'?C.red:C.amber,
+        text:ns.text+(ns.due?(ns.state==='overdue'?' — was due '+fmtDay(ns.due)+' ('+daysLate(ns.due)+'d late)':' — due today'):'')+'.' })
+    }
+    if(st==='offer' && !(ns && ns.kind==='offer_fu')){
       const quiet = daysSince(lastTouch[String(l.id)] || stageSince(l,activity))
       if(quiet!==null && quiet>=3) slipping.push({ l, rank:1, tag:'Offer going cold', c:C.amber, text:(d.last_offer?money(d.last_offer)+' offer':'Offer')+' out with no contact for '+quiet+' days — follow up or it dies.' })
     }
@@ -56,7 +62,7 @@ export default function TodayPage({leads,activity,team,campaigns,reload,openLead
     }
     if(['contacted','appointment'].includes(st)){
       const days = daysSince(stageSince(l,activity)), lim = STALE_DAYS[st]
-      if(lim && days!==null && days>lim && !callbackOf(l)) slipping.push({ l, rank:3, tag:'Stuck in '+STAGE[st].l.toLowerCase(), c:C.muted, text:days+' days with no next step and no callback set.' })
+      if(lim && days!==null && days>lim && !ns) slipping.push({ l, rank:3, tag:'Stuck in '+STAGE[st].l.toLowerCase(), c:C.muted, text:days+' days with no next step set — open it and add one.' })
     }
   }
   slipping.sort((a,b)=>a.rank-b.rank)

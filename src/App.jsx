@@ -8,6 +8,7 @@ import KpiPage from './KpiPage'
 import { enrichLeads, REPAIRS, BLANK_DETAILS, detailsOf, money, callbackOf, callbackState, eqOf, scoreOf, stageOf, STAGE } from './leadModel'
 import Pipeline from './Pipeline'
 import { CallCard, ScriptPanel, LogCall, HandoffPanel, PeoplePanel, PhonesPanel } from './LeadPanels'
+import { DealPanel } from './DealTools'
 import { goodPhones, isDnc } from './phones'
 import VaWorkspace from './VaWorkspace'
 import ListStacking from './ListStacking'
@@ -410,6 +411,7 @@ function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,reloadLeads,on
       <div style={{display:'flex',flexDirection:'column',gap:16}}>
         <ScriptPanel lead={lead}/>
         <LogCall lead={lead} activity={activity} reloadActivity={reloadActivity} reloadLeads={reloadLeads}/>
+        <DealPanel lead={lead} activity={activity} reloadLeads={reloadLeads}/>
         <HandoffPanel lead={lead} reloadLeads={reloadLeads}/>
       </div>
     </div>

@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { STAGES, STAGE, STALE_DAYS, stageOf, stageSince, daysSince, compResult, detailsOf, moveStage, patchLead, money } from './leadModel'
+import { nextStepOf, urgency, negoOf, offerPlan, NEEDS_STEP } from './deals'
+import { Modal, NextStepEditor, NegotiationEditor, NextStepChip, FollowUpPlan } from './DealTools'
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -8,7 +10,9 @@ const C = {
 }
 const DEAL_STAGES = ['contract','assigned','closed']
 const DEFAULT_FEE = 15000
-const BOARD = STAGES.filter(([k])=>k!=='dead')
+const BOARD = STAGES.filter(([k])=>k!=='dead' && k!=='new')
+const NEW_CAP = 60
+const countyOf = l => { const c = l.details && l.details.county; return c ? String(c).replace(/\s*county$/i,'').trim() : '' }
 
 function dealOf(l){ return (l.details && l.details.deal) || {} }
 function feeOf(l){
@@ -28,52 +32,106 @@ export default function Pipeline({leads,activity,reload,openLead,analyze,isMobil
   const [local,setLocal] = useState({})        // optimistic stage moves
   const [over,setOver] = useState(null)
   const [showDead,setShowDead] = useState(false)
+  const [showNew,setShowNew] = useState(false)
   const [deal,setDeal] = useState(null)        // lead being edited in the deal modal
+  const [stepFor,setStepFor] = useState(null)  // lead id for the next-step modal
+  const [negoFor,setNegoFor] = useState(null)  // lead id for the negotiation modal
   const [err,setErr] = useState('')
+  const [q,setQ] = useState('')
+  const [type,setType] = useState('')
+  const [county,setCounty] = useState('')
+  const [attention,setAttention] = useState(false)
 
-  const withStage = leads.map(l=>({ l, s: local[l.id] || stageOf(l, activity) }))
-  const inStage = k => withStage.filter(x=>x.s===k).map(x=>x.l)
-    .sort((a,b)=>new Date(stageSince(a,activity)||0)-new Date(stageSince(b,activity)||0))
+  // Stage, next step and flags for every lead, worked out once per render of new data.
+  const rows = useMemo(()=>leads.map(l=>{
+    const s = local[l.id] || stageOf(l, activity)
+    const since = stageSince(l, activity)
+    const days = daysSince(since)
+    const ns = nextStepOf(l, activity, s)
+    const stale = !!(STALE_DAYS[s] && days!==null && days>STALE_DAYS[s])
+    const noStep = NEEDS_STEP.includes(s) && !ns
+    const due = ns && (ns.state==='overdue' || ns.state==='today')
+    return { l, s, since, days, ns, stale, noStep, due, attention: stale || noStep || due }
+  }),[leads,activity,local])
+
+  const types = useMemo(()=>[...new Set(rows.filter(r=>r.s!=='new').map(r=>r.l.lead_type).filter(Boolean))].sort(),[rows])
+  const counties = useMemo(()=>[...new Set(rows.filter(r=>r.s!=='new').map(r=>countyOf(r.l)).filter(Boolean))].sort(),[rows])
+  const ql = q.trim().toLowerCase(), qd = q.replace(/\D/g,'')
+  const match = r => {
+    const l = r.l
+    if(type && l.lead_type!==type) return false
+    if(county && countyOf(l)!==county) return false
+    if(attention && !r.attention) return false
+    if(ql){
+      const hay = [l.name,l.address,l.city,l.lead_type].join(' ').toLowerCase()
+      const ph = [l.phone,...((l.details&&l.details.phones)||[])].join(' ').replace(/\D/g,'')
+      if(!hay.includes(ql) && !(qd.length>=4 && ph.includes(qd))) return false
+    }
+    return true
+  }
+  const shown = rows.filter(match)
+  const inStage = k => shown.filter(r=>r.s===k)
+    .sort((a,b)=>urgency(a.ns)-urgency(b.ns) || String(a.ns&&a.ns.due||'9').localeCompare(String(b.ns&&b.ns.due||'9')) || new Date(a.since||0)-new Date(b.since||0))
 
   async function move(lead, stage){
-    if((local[lead.id]||stageOf(lead,activity))===stage) return
+    const was = local[lead.id]||stageOf(lead,activity)
+    if(was===stage) return
     setLocal(m=>({...m,[lead.id]:stage})); setErr('')
+    let ok = true
     try{
       await moveStage(lead, stage)
       await reload()
-    }catch(e){ setErr(/fetch/i.test(e.message)?"Couldn't save that move — the database isn't reachable. Try again in a minute.":e.message) }
+    }catch(e){ ok = false; setErr(/fetch/i.test(e.message)?"Couldn't save that move — the database isn't reachable. Try again in a minute.":e.message) }
     setLocal(m=>{ const n={...m}; delete n[lead.id]; return n })
-    if(DEAL_STAGES.includes(stage) && !dealOf(lead).contract_price && stage==='contract') setDeal(lead)
+    if(!ok) return
+    // Ask for what happens next, right when it's fresh.
+    if(stage==='contract' && !dealOf(lead).contract_price) setDeal(lead)
+    else if(stage==='offer' && !negoOf(lead,activity).lastYou) setNegoFor(lead.id)
+    else if(['contacted','appointment','contract','assigned'].includes(stage) && !(lead.details&&lead.details.next)) setStepFor(lead.id)
   }
 
-  const active = withStage.filter(x=>!['closed','dead'].includes(x.s))
-  const underContract = withStage.filter(x=>['contract','assigned'].includes(x.s)).map(x=>x.l)
+  const live = rows.filter(r=>!['new','closed','dead'].includes(r.s))
+  const underContract = rows.filter(r=>['contract','assigned'].includes(r.s)).map(r=>r.l)
   const projected = underContract.reduce((s,l)=>s+feeOf(l).v,0)
   const anyEst = underContract.some(l=>feeOf(l).est)
-  const closed = inStage('closed')
+  const closed = rows.filter(r=>r.s==='closed').map(r=>r.l)
   const closedFees = closed.reduce((s,l)=>s+(Number(dealOf(l).fee)||0),0)
-  const staleCount = active.filter(x=>{ const t=STALE_DAYS[x.s]; const dd=daysSince(stageSince(x.l,activity)); return t && dd!==null && dd>t }).length
+  const overdue = live.filter(r=>r.ns && r.ns.state==='overdue').length
+  const today = live.filter(r=>r.ns && r.ns.state==='today').length
+  const noStep = live.filter(r=>r.noStep).length
+  const staleCount = live.filter(r=>r.stale).length
+  const attnCount = live.filter(r=>r.attention).length
+  const newCount = rows.filter(r=>r.s==='new').length
+  const filtering = !!(ql||type||county||attention)
 
   const h1 = {fontFamily:'Georgia,serif',fontSize:isMobile?22:27,margin:0,fontWeight:600}
   const tile = {background:C.panel,border:'1px solid '+C.line,borderRadius:14,padding:'13px 15px',minWidth:0}
   const cap = {color:C.muted,fontSize:11,textTransform:'uppercase',letterSpacing:1}
+  const pill = on => ({background:on?C.orange:'transparent',border:'1px solid '+(on?C.orange:C.line),color:on?C.ink:C.muted,borderRadius:20,padding:'6px 13px',fontSize:12.5,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'})
+  const sel = {background:C.ink,border:'1px solid '+C.line,borderRadius:20,padding:'6px 12px',color:C.cream,fontSize:12.5,maxWidth:170}
+
+  const byId = id => leads.find(x=>x.id===id)
+  const stepLead = stepFor!==null && byId(stepFor), negoLead = negoFor!==null && byId(negoFor)
 
   const column = ([k,label,color]) => {
-    const items = inStage(k)
-    const fees = ['contract','assigned','closed'].includes(k) ? items.reduce((s,l)=>s+(k==='closed'?(Number(dealOf(l).fee)||0):feeOf(l).v),0) : 0
+    const all = inStage(k)
+    const items = k==='new' ? all.slice(0,NEW_CAP) : all
+    const fees = ['contract','assigned','closed'].includes(k) ? all.reduce((s,r)=>s+(k==='closed'?(Number(dealOf(r.l).fee)||0):feeOf(r.l).v),0) : 0
+    const late = all.filter(r=>r.ns && r.ns.state==='overdue').length
     return (
       <div key={k}
         onDragOver={e=>{ e.preventDefault(); setOver(k) }}
         onDragLeave={()=>setOver(o=>o===k?null:o)}
         onDrop={e=>{ e.preventDefault(); setOver(null); const id=e.dataTransfer.getData('text/plain'); const l=leads.find(x=>String(x.id)===id); if(l) move(l,k) }}
-        style={{flex:'0 0 '+(isMobile?'80vw':'228px'),background:over===k?C.panel2:C.ink,border:'1px solid '+(over===k?color:C.line),borderRadius:14,padding:10,display:'flex',flexDirection:'column',maxHeight:'calc(100vh - 290px)',minHeight:220}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'2px 4px 10px',borderBottom:'2px solid '+color,marginBottom:8}}>
+        style={{flex:'0 0 '+(isMobile?'82vw':'240px'),background:over===k?C.panel2:C.ink,border:'1px solid '+(over===k?color:C.line),borderRadius:14,padding:10,display:'flex',flexDirection:'column',maxHeight:'calc(100vh - 330px)',minHeight:220,scrollSnapAlign:'start'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'2px 4px 10px',borderBottom:'2px solid '+color,marginBottom:8,gap:6}}>
           <span style={{fontWeight:700,fontSize:13}}>{label}</span>
-          <span style={{color:C.muted,fontSize:12}}>{items.length}{fees?' · '+money(fees):''}</span>
+          <span style={{color:C.muted,fontSize:12,whiteSpace:'nowrap'}}>{late>0 && <b style={{color:C.red}} title={late+' overdue'}>{late}! · </b>}{all.length}{fees?' · '+money(fees):''}</span>
         </div>
         <div style={{overflowY:'auto',flex:1,display:'flex',flexDirection:'column',gap:8,paddingRight:2}}>
           {items.length===0 && <div style={{color:C.muted,fontSize:12,padding:'10px 4px',textAlign:'center'}}>{over===k?'Drop here':'—'}</div>}
-          {items.map(l=><Card key={l.id} lead={l} stage={k} activity={activity} onMove={s=>move(l,s)} onOpen={()=>openLead(l.id)} onDeal={()=>setDeal(l)} onAnalyze={()=>analyze(l.id)} pending={!!local[l.id]}/>)}
+          {items.map(r=><Card key={r.l.id} r={r} activity={activity} onMove={s=>move(r.l,s)} onOpen={()=>openLead(r.l.id)} onDeal={()=>setDeal(r.l)} onStep={()=>setStepFor(r.l.id)} onNego={()=>setNegoFor(r.l.id)} onAnalyze={()=>analyze(r.l.id)} pending={!!local[r.l.id]}/>)}
+          {all.length>items.length && <div style={{color:C.muted,fontSize:11.5,textAlign:'center',padding:6}}>+ {all.length-items.length} more — search to find one, or work them from the VA Workspace</div>}
         </div>
       </div>
     )
@@ -84,52 +142,85 @@ export default function Pipeline({leads,activity,reload,openLead,analyze,isMobil
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12,flexWrap:'wrap'}}>
         <div>
           <h1 style={h1}>Pipeline</h1>
-          <p style={{color:C.muted,margin:'3px 0 0',fontSize:isMobile?12.5:13.5,maxWidth:640}}>Drag deals between stages{isMobile?' (or use Move to)':''}. Logging a call outcome on a lead moves it here automatically.</p>
+          <p style={{color:C.muted,margin:'3px 0 0',fontSize:isMobile?12.5:13.5,maxWidth:640}}>Sellers you've talked to, sorted by what's due first. Drag deals between stages{isMobile?' (or use Move to)':''}; logging a call moves them automatically.</p>
         </div>
-        <button onClick={()=>setShowDead(!showDead)} style={{background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:20,padding:'6px 13px',fontSize:12.5,fontWeight:600,cursor:'pointer'}}>{showDead?'Hide':'Show'} dead ({inStage('dead').length})</button>
       </div>
 
       <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(4,1fr)',gap:10,marginTop:16}}>
-        <div style={tile}><div style={cap}>Active deals</div><div style={{fontSize:24,fontFamily:'Georgia,serif',fontWeight:700,marginTop:4}}>{active.length}</div><div style={{color:staleCount?C.amber:C.muted,fontSize:11,marginTop:2}}>{staleCount?staleCount+' need attention':'nothing stale'}</div></div>
-        <div style={tile}><div style={cap}>Under contract</div><div style={{fontSize:24,fontFamily:'Georgia,serif',fontWeight:700,marginTop:4}}>{underContract.length}</div><div style={{color:C.muted,fontSize:11,marginTop:2}}>contract + assigned</div></div>
-        <div style={tile}><div style={cap}>Projected fees</div><div style={{fontSize:24,fontFamily:'Georgia,serif',fontWeight:700,marginTop:4,color:C.orange}}>{money(projected)}</div><div style={{color:C.muted,fontSize:11,marginTop:2}}>{anyEst?'includes $15k estimates':'from entered fees'}</div></div>
+        <div style={tile}><div style={cap}>Active deals</div><div style={{fontSize:24,fontFamily:'Georgia,serif',fontWeight:700,marginTop:4}}>{live.length}</div><div style={{color:staleCount?C.amber:C.muted,fontSize:11,marginTop:2}}>{staleCount?staleCount+' stale':'nothing stale'}{noStep?' · '+noStep+' without a next step':''}</div></div>
+        <div onClick={()=>setAttention(true)} style={{...tile,cursor:'pointer',borderColor:overdue?C.red+'77':C.line}}><div style={cap}>Next steps due</div><div style={{fontSize:24,fontFamily:'Georgia,serif',fontWeight:700,marginTop:4,color:overdue?C.red:today?C.amber:C.cream}}>{overdue+today}</div><div style={{color:overdue?C.red:C.muted,fontSize:11,marginTop:2}}>{overdue?overdue+' overdue · ':''}{today} due today</div></div>
+        <div style={tile}><div style={cap}>Projected fees</div><div style={{fontSize:24,fontFamily:'Georgia,serif',fontWeight:700,marginTop:4,color:C.orange}}>{money(projected)}</div><div style={{color:C.muted,fontSize:11,marginTop:2}}>{underContract.length} under contract{anyEst?' · incl. $15k estimates':''}</div></div>
         <div style={tile}><div style={cap}>Closed fees</div><div style={{fontSize:24,fontFamily:'Georgia,serif',fontWeight:700,marginTop:4,color:C.green}}>{money(closedFees)}</div><div style={{color:C.muted,fontSize:11,marginTop:2}}>{closed.length} closed deal{closed.length===1?'':'s'}</div></div>
+      </div>
+
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginTop:14}}>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search name, address or phone" style={{...sel,borderRadius:20,maxWidth:'none',width:isMobile?'100%':230,padding:'7px 13px',outline:'none',boxSizing:'border-box'}}/>
+        <button onClick={()=>setAttention(!attention)} style={pill(attention)}>Needs attention{attnCount?' ('+attnCount+')':''}</button>
+        {types.length>1 && <select value={type} onChange={e=>setType(e.target.value)} style={sel}><option value="">All list types</option>{types.map(t=><option key={t}>{t}</option>)}</select>}
+        {counties.length>1 && <select value={county} onChange={e=>setCounty(e.target.value)} style={sel}><option value="">All counties</option>{counties.map(t=><option key={t}>{t}</option>)}</select>}
+        {filtering && <button onClick={()=>{ setQ(''); setType(''); setCounty(''); setAttention(false) }} style={{...pill(false),border:'none'}}>Clear</button>}
+        <span style={{flex:1}}/>
+        <button onClick={()=>setShowNew(!showNew)} style={pill(showNew)}>{showNew?'Hide':'Show'} new leads ({newCount.toLocaleString()})</button>
+        <button onClick={()=>setShowDead(!showDead)} style={pill(showDead)}>{showDead?'Hide':'Show'} dead ({rows.filter(r=>r.s==='dead').length})</button>
       </div>
 
       {err && <div style={{marginTop:12,fontSize:12.5,color:C.red,background:C.red+'14',border:'1px solid '+C.red+'44',borderRadius:8,padding:'9px 12px'}}>{err}</div>}
 
       {leads.length===0 ?
       <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:30,marginTop:16,color:C.muted,textAlign:'center'}}>No leads yet — add some on the Leads page and they'll show up here.</div> :
-      <div style={{display:'flex',gap:12,overflowX:'auto',marginTop:16,paddingBottom:10,scrollSnapType:isMobile?'x mandatory':'none'}}>
+      live.length===0 && !showNew && !showDead && closed.length===0 ?
+      <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:30,marginTop:16,textAlign:'center'}}>
+        <div style={{fontWeight:700,fontSize:15}}>No deals in motion yet</div>
+        <div style={{color:C.muted,fontSize:13,marginTop:6,lineHeight:1.5}}>When you log a call where you talked to the seller, the lead moves onto this board. Your {newCount.toLocaleString()} uncontacted leads are in Leads and the VA Workspace.</div>
+        <button onClick={()=>setShowNew(true)} style={{...pill(false),marginTop:12}}>Show new leads anyway</button>
+      </div> :
+      <div style={{display:'flex',gap:12,overflowX:'auto',marginTop:14,paddingBottom:10,scrollSnapType:isMobile?'x mandatory':'none'}}>
+        {showNew && column(STAGES.find(s=>s[0]==='new'))}
         {BOARD.map(column)}
         {showDead && column(STAGES.find(s=>s[0]==='dead'))}
       </div>}
+      {filtering && <div style={{color:C.muted,fontSize:12,marginTop:4}}>Showing {shown.filter(r=>showNew||r.s!=='new').filter(r=>showDead||r.s!=='dead').length} matching</div>}
 
       {deal && <DealModal lead={deal} onClose={()=>setDeal(null)} onSaved={async()=>{ setDeal(null); await reload() }}/>}
+      {stepLead && <Modal title="Next step" sub={stepLead.name+' · '+STAGE[rows.find(r=>r.l.id===stepLead.id)?.s||'new'].l} onClose={()=>setStepFor(null)}>
+        <NextStepEditor lead={stepLead} stage={rows.find(r=>r.l.id===stepLead.id)?.s||'new'} activity={activity} onSaved={reload} onClose={()=>setStepFor(null)}/>
+      </Modal>}
+      {negoLead && <Modal title="Offer & negotiation" sub={negoLead.name+' · '+[negoLead.address,negoLead.city].filter(Boolean).join(', ')} onClose={()=>setNegoFor(null)}>
+        <NegotiationEditor lead={negoLead} stage={rows.find(r=>r.l.id===negoLead.id)?.s||'offer'} activity={activity} onSaved={reload}/>
+      </Modal>}
     </div>
   )
 }
 
-function Card({lead,stage,activity,onMove,onOpen,onDeal,onAnalyze,pending}){
+function Card({r,activity,onMove,onOpen,onDeal,onStep,onNego,onAnalyze,pending}){
+  const { l:lead, s:stage, days, ns, stale } = r
   const cr = compResult(lead)
   const d = detailsOf(lead)
   const dl = dealOf(lead)
-  const days = daysSince(stageSince(lead,activity))
-  const stale = STALE_DAYS[stage] && days!==null && days>STALE_DAYS[stage]
   const ci = closingIn(lead)
   const isDeal = DEAL_STAGES.includes(stage)
   const small = {color:C.muted,fontSize:11}
+  const n = ['offer','contract'].includes(stage) || stage==='appointment' ? negoOf(lead, activity) : null
+  const plan = stage==='offer' ? offerPlan(lead, activity) : null
+  const border = ns && ns.state==='overdue' ? C.red+'88' : stale ? C.amber+'88' : C.line
+  const btn = c => ({background:'transparent',border:'1px solid '+c,color:c,borderRadius:6,padding:'4px 8px',fontSize:11,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'})
   return (
     <div draggable onDragStart={e=>{ e.dataTransfer.setData('text/plain',String(lead.id)); e.dataTransfer.effectAllowed='move' }}
-      style={{background:C.panel,border:'1px solid '+(stale?C.amber+'88':C.line),borderRadius:10,padding:11,cursor:'grab',opacity:pending?0.6:1}}>
+      style={{background:C.panel,border:'1px solid '+border,borderRadius:10,padding:11,cursor:'grab',opacity:pending?0.6:1}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:6,alignItems:'flex-start'}}>
         <span onClick={onOpen} style={{fontWeight:700,fontSize:13.5,cursor:'pointer',lineHeight:1.3}}>{lead.name}</span>
-        {days!==null && <span style={{...small,whiteSpace:'nowrap',color:stale?C.amber:C.muted}}>{days}d</span>}
+        {days!==null && <span title={days+' days in this stage'} style={{...small,whiteSpace:'nowrap',color:stale?C.amber:C.muted}}>{days}d</span>}
       </div>
       <div style={{...small,marginTop:2}}>{[lead.address,lead.city].filter(Boolean).join(', ')||lead.state}</div>
-      <div style={{...small,marginTop:1}}>{lead.lead_type}{d.asking_price?' · asks '+money(d.asking_price):''}</div>
+      <div style={{...small,marginTop:1}}>{[lead.lead_type, d.sell_reason!=='Unknown'&&d.sell_reason, d.timeline!=='Unsure'&&d.timeline&&'timeline '+d.timeline.toLowerCase()].filter(Boolean).join(' · ')}</div>
 
-      {cr && !isDeal && <div style={{fontSize:11.5,marginTop:6}}>ARV {money(cr.arv)} · <span style={{color:C.orange}}>offer {money(cr.open)}–{money(cr.walk)}</span></div>}
+      {n && (n.lastYou || n.lastSeller) && <div style={{fontSize:11.5,marginTop:6,display:'flex',gap:6,flexWrap:'wrap'}}>
+        {n.lastYou && <span>You <b style={{color:C.orange}}>{money(n.lastYou.amount)}</b></span>}
+        {n.lastSeller && <span>· Seller <b>{money(n.lastSeller.amount)}</b></span>}
+        {n.gap!==null && <span style={{color:n.gap<=0?C.green:C.amber}}>· {n.gap<=0?'agreed':'gap '+money(n.gap)}</span>}
+      </div>}
+      {cr && !isDeal && stage!=='offer' && <div style={{fontSize:11.5,marginTop:6}}>ARV {money(cr.arv)} · <span style={{color:C.orange}}>offer {money(cr.open)}–{money(cr.walk)}</span></div>}
+      {cr && stage==='offer' && <div style={{...small,marginTop:3}}>Walk-away {money(cr.walk)} · ARV {money(cr.arv)}</div>}
       {!cr && ['appointment','offer'].includes(stage) && <div onClick={onAnalyze} style={{fontSize:11.5,marginTop:6,color:C.orange,cursor:'pointer'}}>Run comps →</div>}
 
       {isDeal &&
@@ -140,13 +231,16 @@ function Card({lead,stage,activity,onMove,onOpen,onDeal,onAnalyze,pending}){
         {stage==='closed' && dl.closing_date && <div style={{color:C.muted}}>Closed {fmtDate(dl.closing_date)}</div>}
       </div>}
 
-      {stale && <div style={{color:C.amber,fontSize:11,marginTop:6}}>Stale — {days} days in {STAGE[stage].l.toLowerCase()}</div>}
+      {plan && !(ns && ns.kind==='offer_fu') && <FollowUpPlan plan={plan} small/>}
+      {!['closed','dead'].includes(stage) && <NextStepChip ns={ns} onClick={onStep}/>}
+      {stale && !ns && <div style={{color:C.amber,fontSize:11,marginTop:6}}>Stale — {days} days in {STAGE[stage].l.toLowerCase()}</div>}
 
       <div style={{display:'flex',gap:6,marginTop:8,alignItems:'center'}}>
         <select value={stage} onChange={e=>onMove(e.target.value)} onClick={e=>e.stopPropagation()} style={{flex:1,minWidth:0,background:C.ink,border:'1px solid '+C.line,borderRadius:6,padding:'4px 6px',color:C.muted,fontSize:11}}>
           {STAGES.map(([k,l])=><option key={k} value={k}>{k===stage?l:'Move to: '+l}</option>)}
         </select>
-        {isDeal && <button onClick={onDeal} style={{background:'transparent',border:'1px solid '+C.orange,color:C.orange,borderRadius:6,padding:'4px 8px',fontSize:11,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'}}>Deal</button>}
+        {['appointment','offer'].includes(stage) && <button onClick={onNego} style={btn(C.orange)}>Offer</button>}
+        {isDeal && <button onClick={onDeal} style={btn(C.orange)}>Deal</button>}
       </div>
     </div>
   )
