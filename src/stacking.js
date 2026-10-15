@@ -352,3 +352,32 @@ export function downloadCsv(props, filename){
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href), 2000)
 }
+
+// ---------- one property ----------
+export async function updateProperty(id, patch){
+  const { error } = await supabase.from('properties').update({ ...patch, updated_at:new Date().toISOString() }).eq('id', id)
+  if(error) throw error
+}
+// Signals we can read straight off the record (no extra data needed).
+export function propertySignals(p){
+  const d = p.data||{}, out = []
+  const mailStreet = String(p.mailing||'').split(',')[0]
+  const mailState = (String(p.mailing||'').match(/,\s*([A-Za-z]{2})\s*\d{0,5}(-\d{4})?\s*$/)||[])[1]
+  const absentee = d.occupancy==='Absentee' || (mailStreet && normAddr(mailStreet)!==normAddr(p.address) && !/^po box/i.test(mailStreet) ? true : false)
+  if(mailState && p.state && mailState.toUpperCase()!==String(p.state).toUpperCase()) out.push(['Out-of-state owner','#4aa8ff','Mails to '+mailState.toUpperCase()])
+  else if(absentee) out.push(['Absentee owner','#4aa8ff','Mailing address is different from the property'])
+  if(d.value){
+    const loan = d.loan!==undefined ? d.loan : d.equity!==undefined ? d.value-d.equity : null
+    if(loan===0) out.push(['Free & clear','#3fd08a','No open loans on record'])
+    else if(loan!==null && (d.value-loan)/d.value>=0.5) out.push(['High equity','#3fd08a',Math.round((d.value-loan)/d.value*100)+'% equity'])
+  }
+  const yr = (String(d.last_sale_date||'').match(/(19|20)\d\d/)||[])[0]
+  if(yr){ const yrs = new Date().getFullYear()-Number(yr); if(yrs>=15) out.push(['Owned '+yrs+' years','#f5b942','Long ownership usually means big equity and low urgency to stay']) }
+  const ot = String(d.owner_type||'')
+  if(/deceased|estate|probate|personal rep/i.test(ot)) out.push(['Estate / probate','#e5573f','Talk to the executor or heirs'])
+  else if(/llc|company|corp|inc/i.test(ot)) out.push(['Company owned','#88a0b4','Ask for the decision maker'])
+  else if(/trust/i.test(ot)) out.push(['Trust','#88a0b4','Ask for the trustee'])
+  else if(/gov|hoa|lien/i.test(ot)) out.push(['Check owner','#f5b942','Name on file may be a lender or HOA'])
+  if(!(p.phones||[]).length) out.push(['Needs skip trace','#f5b942','No phone numbers yet'])
+  return out
+}

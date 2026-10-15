@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
-import { money } from './leadModel'
+import { money, STAGE } from './leadModel'
+import { ResearchLinks } from './LeadPanels'
 import { campaignName } from './team'
 import { TYPE_NAMES, guessType, STACK_COLOR, FIELDS, MAIN_FIELDS, autoMap, parseCsv, buildRecords, importList,
-  queryProps, fetchAllMatching, fetchStackStats, fetchLists, removeList, syncLeadStacks, sendToLeads, downloadCsv, stackErr, fmtPhone } from './stacking'
+  queryProps, fetchAllMatching, fetchStackStats, fetchLists, removeList, syncLeadStacks, sendToLeads, updateProperty, propertySignals, downloadCsv, stackErr, fmtPhone } from './stacking'
 
 const C = {
   navy:'#0b1826', ink:'#081019', panel:'#102434', panel2:'#0d1f2e', line:'#1d3a4a',
@@ -182,10 +183,14 @@ export default function ListStacking({leads,campaigns,reloadLeads,openLead,isMob
 
         {rows.length===0 && !loading && <div style={{padding:24,color:C.muted,fontSize:13}}>No properties match these filters.</div>}
         {rows.map(p=>(
-          <PropRow key={p.id} p={p} picked={allMatching||picked.has(p.id)} onPick={()=>toggle(p.id)} open={open===p.id} onOpen={()=>setOpen(open===p.id?null:p.id)}
+          <PropRow key={p.id} p={p} picked={allMatching||picked.has(p.id)} onPick={()=>toggle(p.id)} open={open===p.id} onOpen={()=>setOpen(p.id)}
             campaigns={campaigns} leads={leads} openLead={openLead} isMobile={isMobile}/>
         ))}
         {rows.length<count && <div style={{padding:12,textAlign:'center'}}><button disabled={loading} onClick={()=>load(f,true,rows.length)} style={btn(false)}>{loading?'Loading…':'Show more ('+(count-rows.length).toLocaleString()+' left)'}</button></div>}
+        {open && rows.some(r=>r.id===open) && (()=>{ const i = rows.findIndex(r=>r.id===open)
+          return <PropertyDrawer p={rows[i]} idx={i} total={count} onClose={()=>setOpen(null)}
+            onPrev={i>0?()=>setOpen(rows[i-1].id):null} onNext={i<rows.length-1?()=>setOpen(rows[i+1].id):null}
+            leads={leads} campaigns={campaigns} openLead={openLead} reload={()=>load(f)} reloadLeads={reloadLeads} isMobile={isMobile}/> })()}
       </div>
 
       {lists.length>0 &&
@@ -219,7 +224,7 @@ function StackBadge({n,big}){
   </div>
 }
 
-function PropRow({p,picked,onPick,open,onOpen,campaigns,leads,openLead,isMobile}){
+function PropRow({p,picked,onPick,open,onOpen,leads,isMobile}){
   const d = p.data||{}
   const lead = p.lead_id && leads.find(l=>String(l.id)===String(p.lead_id))
   const equity = d.value ? (d.loan!==undefined ? Math.max(0,d.value-d.loan) : d.equity!==undefined ? Math.min(d.equity,d.value) : null) : null
@@ -245,29 +250,6 @@ function PropRow({p,picked,onPick,open,onOpen,campaigns,leads,openLead,isMobile}
           </div>
         </div>
       </div>
-      {open &&
-      <div style={{padding:'4px 16px 16px',display:'grid',gridTemplateColumns:isMobile?'1fr':'1fr 1fr 1fr',gap:14,fontSize:12.5}}>
-        <div>
-          <div style={{color:C.muted,fontSize:10.5,textTransform:'uppercase',letterSpacing:1,marginBottom:5}}>Lists it's on</div>
-          {(p.lists||[]).map(x=><div key={x.list_id} style={{marginBottom:3}}><TypeChip t={x.type}/> {x.name} <span style={{color:C.muted}}>· {new Date(x.at).toLocaleDateString()}</span></div>)}
-        </div>
-        <div>
-          <div style={{color:C.muted,fontSize:10.5,textTransform:'uppercase',letterSpacing:1,marginBottom:5}}>Owner</div>
-          <div>{p.owner_name||'—'}</div>
-          {p.mailing && <div style={{color:C.muted}}>Mails to: {p.mailing}</div>}
-          {(p.phones||[]).map(ph=><div key={ph}><a href={'tel:'+ph} style={{color:C.green,textDecoration:'none'}}>{fmtPhone(ph)}</a></div>)}
-          {(p.emails||[]).map(e=><div key={e} style={{color:C.muted}}>{e}</div>)}
-        </div>
-        <div>
-          <div style={{color:C.muted,fontSize:10.5,textTransform:'uppercase',letterSpacing:1,marginBottom:5}}>Property</div>
-          <div>{[d.beds&&d.beds+'bd', d.baths&&d.baths+'ba', d.sqft&&Number(d.sqft).toLocaleString()+' sqft', d.year_built&&'built '+d.year_built].filter(Boolean).join(' · ')||'—'}</div>
-          {d.value ? <div>Est. value {money(d.value)}{d.loan!==undefined?' · owes '+money(d.loan):''}</div> : null}
-          {d.last_sale_date && <div style={{color:C.muted}}>Last sold {d.last_sale_date}{d.last_sale_amount?' for '+money(d.last_sale_amount):''}</div>}
-          {p.county && <div style={{color:C.muted}}>{p.county} County</div>}
-          {p.campaign && campaignName(campaigns,p.campaign) && <div style={{color:C.muted}}>Campaign: {campaignName(campaigns,p.campaign)}</div>}
-          {lead && <button onClick={()=>openLead(lead.id)} style={{marginTop:8,background:'transparent',border:'1px solid '+C.orange,color:C.orange,borderRadius:8,padding:'5px 11px',fontSize:11.5,fontWeight:700,cursor:'pointer'}}>Open lead →</button>}
-        </div>
-      </div>}
     </div>
   )
 }
@@ -362,6 +344,128 @@ function Upload({leads,campaigns,isMobile,onDone,card,inp,btn,cap}){
         </button>
       </div>}
       {status && <div style={{marginTop:12,fontSize:12.5,color:status.ok?C.green:C.red}}>{status.t}</div>}
+    </div>
+  )
+}
+
+// ---------- full property view ----------
+function PropertyDrawer({p,idx,total,onClose,onPrev,onNext,leads,campaigns,openLead,reload,reloadLeads,isMobile}){
+  const d = p.data||{}
+  const lead = p.lead_id && leads.find(l=>String(l.id)===String(p.lead_id))
+  const [notes,setNotes] = useState(d.notes||'')
+  const [camp,setCamp] = useState(p.campaign||'')
+  const [busy,setBusy] = useState(false)
+  const [msg,setMsg] = useState(null)
+  const [copied,setCopied] = useState('')
+  useEffect(()=>{
+    const onKey = e => { if(e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return
+      if(e.key==='Escape') onClose(); else if(e.key==='ArrowRight' && onNext) onNext(); else if(e.key==='ArrowLeft' && onPrev) onPrev() }
+    window.addEventListener('keydown', onKey); return ()=>window.removeEventListener('keydown', onKey)
+  },[onClose,onNext,onPrev])
+  const loan = d.loan!==undefined ? d.loan : (d.value && d.equity!==undefined ? d.value-d.equity : null)
+  const equity = d.value && loan!==null ? d.value-loan : null
+  const yr = (String(d.last_sale_date||'').match(/(19|20)\d\d/)||[])[0]
+  const full = [p.address, p.city, [p.state, p.zip].filter(Boolean).join(' ')].filter(Boolean).join(', ')
+  const signals = propertySignals(p)
+  const pseudoLead = { address:p.address, city:p.city, state:p.state, name:p.owner_name, lead_type:(p.list_types||[]).join(' '), details:{ zip:p.zip, county:p.county, lists:p.list_types, owner_type:d.owner_type } }
+  const st = lead ? ((lead.details&&lead.details.stage)||'new') : null
+  async function copy(t,k){ try{ await navigator.clipboard.writeText(t); setCopied(k); setTimeout(()=>setCopied(''),1500) }catch{ /* blocked */ } }
+  async function act(fn, ok){ setBusy(true); setMsg(null); try{ await fn(); if(ok) setMsg({ok:true,t:ok}) }catch(e){ setMsg({ok:false,t:e.message}) } setBusy(false) }
+  const saveNotes = () => act(async()=>{ await updateProperty(p.id, { data:{...d, notes:notes.trim()} }); await reload() }, 'Notes saved.')
+  const saveCamp = v => { setCamp(v); act(async()=>{ await updateProperty(p.id, { campaign:v||null }); await reload() }, v?'Campaign updated.':'Campaign cleared.') }
+  const send = () => act(async()=>{ const r = await sendToLeads([p], { leads, campaign:camp }); await Promise.all([reload(), reloadLeads()]); if(!r.created && !r.linked) throw new Error('Already in Leads.') }, 'Sent to Leads.')
+  const sec = {background:C.ink,borderRadius:12,padding:'12px 14px'}
+  const cap2 = {color:C.muted,fontSize:10.5,textTransform:'uppercase',letterSpacing:1,marginBottom:6}
+  const tile = (l,v,c) => <div key={l} style={{background:C.panel,borderRadius:8,padding:'7px 9px',minWidth:0}}><div style={{color:C.muted,fontSize:10.5}}>{l}</div><div style={{fontWeight:700,fontSize:13.5,marginTop:1,color:c||C.cream}}>{v}</div></div>
+  const btn2 = p2 => ({background:p2?C.orange:'transparent',color:p2?C.ink:C.muted,border:'1px solid '+(p2?C.orange:C.line),borderRadius:8,padding:'7px 12px',fontSize:12,fontWeight:700,cursor:busy?'default':'pointer',opacity:busy?0.6:1,whiteSpace:'nowrap'})
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(4,10,16,.6)',zIndex:50,display:'flex',justifyContent:'flex-end'}}>
+      <div onClick={e=>e.stopPropagation()} role="dialog" aria-label={'Property: '+p.address} style={{width:isMobile?'100%':600,maxWidth:'100%',height:'100%',overflowY:'auto',background:C.navy,borderLeft:'1px solid '+C.line,boxSizing:'border-box',padding:isMobile?16:22}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginBottom:12}}>
+          <div style={{display:'flex',gap:6}}>
+            <button disabled={!onPrev} onClick={onPrev||undefined} style={{...btn2(false),opacity:onPrev?1:0.4}}>‹ Prev</button>
+            <button disabled={!onNext} onClick={onNext||undefined} style={{...btn2(false),opacity:onNext?1:0.4}}>Next ›</button>
+            <span style={{color:C.muted,fontSize:12,alignSelf:'center'}}>{idx+1} of {total.toLocaleString()}</span>
+          </div>
+          <button onClick={onClose} aria-label="Close" style={{...btn2(false),fontSize:14,padding:'4px 11px'}}>✕</button>
+        </div>
+
+        <div style={{display:'flex',gap:12,alignItems:'flex-start'}}>
+          <StackBadge n={p.stack} big/>
+          <div style={{minWidth:0,flex:1}}>
+            <div style={{fontFamily:'Georgia,serif',fontSize:22,fontWeight:600,lineHeight:1.2}}>{p.address}</div>
+            <div style={{color:C.muted,fontSize:13,marginTop:2}}>{[p.city,p.state].filter(Boolean).join(', ')} {p.zip||''}{p.county?' · '+p.county+' County':''}</div>
+            <div style={{marginTop:6}}>{(p.list_types||[]).map(t=><TypeChip key={t} t={t}/>)}</div>
+          </div>
+          <button onClick={()=>copy(full,'addr')} style={{...btn2(false),padding:'5px 9px',fontSize:11.5}}>{copied==='addr'?'Copied':'Copy address'}</button>
+        </div>
+
+        {signals.length>0 && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:12}}>
+          {signals.map(([l,c,tip])=><span key={l} title={tip} style={{background:c+'1e',color:c,border:'1px solid '+c+'55',borderRadius:14,padding:'3px 10px',fontSize:11.5,fontWeight:700}}>{l}</span>)}
+        </div>}
+
+        <iframe title="Map" src={'https://maps.google.com/maps?q='+encodeURIComponent(full)+'&z=16&output=embed'} loading="lazy" style={{width:'100%',height:190,border:0,borderRadius:12,marginTop:14,background:C.ink}}/>
+
+        <div style={{display:'grid',gap:10,marginTop:12}}>
+          <div style={sec}>
+            <div style={cap2}>Owner & contact</div>
+            <div style={{fontWeight:700,fontSize:15}}>{p.owner_name||'No owner name'}</div>
+            {d.co_owner && <div style={{color:C.cream,fontSize:12.5}}>Co-owner: {d.co_owner}</div>}
+            {d.owner_type && !/^individual$/i.test(d.owner_type) && <div style={{color:C.muted,fontSize:12.5}}>{d.owner_type}</div>}
+            {p.mailing && <div style={{color:C.muted,fontSize:12.5,marginTop:3}}>Mails to: {p.mailing}</div>}
+            <div style={{marginTop:8}}>
+              {(p.phones||[]).length===0 && <div style={{color:C.amber,fontSize:12.5}}>No phone numbers — skip trace this one, then re-upload the file; numbers merge onto this property.</div>}
+              {(p.phones||[]).map((ph,i)=>(
+                <div key={ph} style={{display:'flex',alignItems:'center',gap:8,padding:'4px 0'}}>
+                  <a href={'tel:'+ph} style={{color:C.green,textDecoration:'none',fontWeight:700,fontSize:14}}>{fmtPhone(ph)}</a>
+                  {i===0 && <span style={{color:C.muted,fontSize:11}}>primary</span>}
+                  <button onClick={()=>copy(ph,ph)} style={{...btn2(false),padding:'2px 8px',fontSize:11,marginLeft:'auto'}}>{copied===ph?'Copied':'Copy'}</button>
+                </div>))}
+              {(p.emails||[]).map(e=><div key={e} style={{color:C.muted,fontSize:12.5}}>{e}</div>)}
+            </div>
+          </div>
+
+          <div style={sec}>
+            <div style={cap2}>Property & equity</div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:6}}>
+              {tile('Beds',d.beds||'—')}{tile('Baths',d.baths||'—')}{tile('Sq ft',d.sqft?Number(d.sqft).toLocaleString():'—')}{tile('Built',d.year_built||'—')}
+              {tile('Est. value',d.value?money(d.value):'—')}{tile('Owes',loan!==null?money(loan):'—')}
+              {tile('Equity',equity!==null?money(equity)+(d.value?' ('+Math.round(equity/d.value*100)+'%)':''):'—',equity>0?C.green:undefined)}
+              {tile('Last sale',d.last_sale_date?(d.last_sale_date+(d.last_sale_amount?' · '+money(d.last_sale_amount):'')):'—')}
+            </div>
+            {(d.property_type || yr) && <div style={{color:C.muted,fontSize:12,marginTop:6}}>{[d.property_type, yr&&'owned since '+yr+' ('+(new Date().getFullYear()-Number(yr))+' yrs)'].filter(Boolean).join(' · ')}</div>}
+          </div>
+
+          <div style={sec}>
+            <div style={cap2}>Distress & list history</div>
+            {(d.record_date || d.case_number) && <div style={{fontSize:12.5,marginBottom:6}}><b style={{color:C.amber}}>Filed</b> {d.record_date||'—'}{d.case_number?' · Case/Instr # '+d.case_number:''}</div>}
+            {(p.lists||[]).map(x=><div key={x.list_id} style={{fontSize:12.5,padding:'3px 0',display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}><TypeChip t={x.type}/><span>{x.name}</span><span style={{color:C.muted}}>· added {new Date(x.at).toLocaleDateString()}</span></div>)}
+          </div>
+
+          {lead && <div style={{...sec,border:'1px solid '+C.orange+'55'}}>
+            <div style={cap2}>In your Leads</div>
+            <div style={{fontSize:13}}>{lead.name} · <b style={{color:(STAGE[st]||STAGE.new).c}}>{(STAGE[st]||STAGE.new).l}</b> · {lead._dials ? lead._dials+' call'+(lead._dials===1?'':'s')+(lead._lastCall?' · last '+new Date(lead._lastCall).toLocaleDateString():'') : 'not called yet'}</div>
+            <button onClick={()=>openLead(lead.id)} style={{...btn2(true),marginTop:8}}>Open lead →</button>
+          </div>}
+
+          <div style={sec}><ResearchLinks lead={pseudoLead}/></div>
+
+          <div style={sec}>
+            <div style={cap2}>Notes</div>
+            <textarea rows={3} value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Anything you learned — drive-by notes, county records, neighbor info…" style={{background:C.panel,border:'1px solid '+C.line,borderRadius:8,padding:'9px 11px',color:C.cream,fontSize:13,outline:'none',width:'100%',boxSizing:'border-box',resize:'vertical',fontFamily:'inherit'}}/>
+            {notes!==(d.notes||'') && <button disabled={busy} onClick={saveNotes} style={{...btn2(true),marginTop:6}}>Save notes</button>}
+          </div>
+
+          <div style={{...sec,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+            <select value={camp} onChange={e=>saveCamp(e.target.value)} style={{background:C.panel,border:'1px solid '+C.line,borderRadius:8,padding:'7px 9px',color:C.cream,fontSize:12.5}}>
+              <option value="">No campaign</option>{campaigns.map(c=><option key={c.id} value={String(c.id)}>{c.name}</option>)}
+            </select>
+            {!lead && <button disabled={busy} onClick={send} style={btn2(true)}>Send to Leads</button>}
+            <span style={{color:C.muted,fontSize:11.5,marginLeft:'auto'}}>← → to move between properties · Esc to close</span>
+          </div>
+          {msg && <div style={{fontSize:12.5,color:msg.ok?C.green:C.red}}>{msg.t}</div>}
+        </div>
+      </div>
     </div>
   )
 }
