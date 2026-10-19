@@ -349,7 +349,7 @@ function LeadWork({lead,idx,total,onBack,onPrev,onNext,activity,reloadActivity,r
           <PeoplePanel lead={lead} reloadLeads={reloadLeads}/>
         </div>
         <div style={{display:'flex',flexDirection:'column',gap:16,minWidth:0}}>
-          <ScriptPanel lead={lead}/>
+          <ScriptPanel lead={lead} role="va"/>
           <LogCall lead={lead} activity={activity} reloadActivity={reloadActivity} reloadLeads={reloadLeads} onNext={onNext}/>
           <HandoffPanel lead={lead} reloadLeads={reloadLeads}/>
         </div>

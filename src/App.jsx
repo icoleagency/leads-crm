@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { fetchAllRows } from './fetchAll'
 import { supabase } from './supabaseClient'
-import AcademyPage from './AcademyPage'
+import ScriptsPage from './ScriptsPage'
 import TodayPage from './TodayPage'
 import DispoPage from './DispoPage'
 import KpiPage from './KpiPage'
@@ -60,7 +60,7 @@ const NAV = [
   ['pipeline','P','Pipeline'],
   ['dispo','B','Buyers & Dispo'],
   ['comping','D','Deal Analyzer'],
-  ['academy','A','Academy'],
+  ['scripts','C','Scripts'],
 ]
 
 export default function App({access={role:'owner',state:'ok'},onSignOut}){
@@ -80,6 +80,7 @@ export default function App({access={role:'owner',state:'ok'},onSignOut}){
   const [analyzeId,setAnalyzeId] = useState('')
   const [focusId,setFocusId] = useState('')
   const [dispoId,setDispoId] = useState('')
+  const [scriptId,setScriptId] = useState('')
   const [campaigns,setCampaigns] = useState([])
   const [team,setTeam] = useState([])
   const [tErr,setTErr] = useState('')
@@ -103,14 +104,15 @@ export default function App({access={role:'owner',state:'ok'},onSignOut}){
     try{ setActivity(await fetchActivity(90)); setActErr('') }
     catch(e){ setActErr(activityErr(e.message)) }
   }
-  const go = (p)=>{ if(p==='comping') setAnalyzeId(''); if(p==='dispo') setDispoId(''); setPage(p); setMenuOpen(false) }
+  const go = (p)=>{ if(p==='comping') setAnalyzeId(''); if(p==='dispo') setDispoId(''); if(p==='scripts') setScriptId(''); setPage(p); setMenuOpen(false) }
   const openLead = (id)=>{ setFocusId(String(id)); setPage('leads'); window.scrollTo({top:0}) }
   const openDispo = (id)=>{ setDispoId(String(id||'')); setPage('dispo'); window.scrollTo({top:0}) }
+  const openScript = (id)=>{ setScriptId(String(id||'')); setPage('scripts'); window.scrollTo({top:0}) }
   const analyzeLead = (id)=>{ setAnalyzeId(String(id)); setPage('comping'); window.scrollTo({top:0}) }
   const today = tally(inLastDays(activity,1))
   const meMember = team.find(m=>String(m.id)===meId)
   const vaMode = lockedVa || (!!meMember && meId!=='owner')
-  const VA_PAGES = ['va','academy']
+  const VA_PAGES = ['va','scripts']
   const navItems = vaMode ? NAV.filter(([id])=>VA_PAGES.includes(id)) : NAV
   const view = vaMode && !VA_PAGES.includes(page) ? 'va' : page
 
@@ -160,10 +162,10 @@ export default function App({access={role:'owner',state:'ok'},onSignOut}){
           {err && <ErrorBanner msg={err} onRetry={load} onClose={()=>setErr('')}/>}
           {access.state==='setup' && !lockedVa && <div style={{background:C.amber+'18',border:'1px solid '+C.amber+'66',color:C.amber,borderRadius:10,padding:'10px 14px',fontSize:13,marginBottom:14,lineHeight:1.5}}><b>Security setup isn't finished.</b> You're signed in, but the database is still open to anyone with the site's public key. Run the lock-down SQL (supabase/lock-down.sql) in Supabase to make it private.</div>}
           {view==='va' && <VaWorkspace lockedVa={lockedVa} access={access} leads={leads} activity={activity} campaigns={campaigns} team={team} teamErr={tErr} reloadTeam={loadTeam} reloadLeads={reloadQuiet} reloadActivity={loadActivity} meId={meId} onMe={onMe} isMobile={isMobile}/>}
-          {view==='leads' && <LeadsPage key={focusId||'all'} initialSel={focusId} campaigns={campaigns} leads={leads} loading={loading} reload={load} reloadQuiet={reloadQuiet} loadErr={err} activity={activity} reloadActivity={loadActivity} onAnalyze={analyzeLead} isMobile={isMobile}/>}
+          {view==='leads' && <LeadsPage key={focusId||'all'} initialSel={focusId} campaigns={campaigns} leads={leads} loading={loading} reload={load} reloadQuiet={reloadQuiet} loadErr={err} activity={activity} reloadActivity={loadActivity} onAnalyze={analyzeLead} onScript={openScript} isMobile={isMobile}/>}
           {view==='lists' && <ListStacking leads={leads} campaigns={campaigns} reloadLeads={reloadQuiet} openLead={openLead} isMobile={isMobile}/>}
           {view==='comping' && <DealAnalyzer key={analyzeId||'blank'} leads={leads} initialLeadId={analyzeId} reload={load} isMobile={isMobile}/>}
-          {view==='academy' && <AcademyPage isMobile={isMobile}/>}
+          {view==='scripts' && <ScriptsPage key={scriptId||'none'} leads={leads} initialLeadId={scriptId} lockedVa={lockedVa} isMobile={isMobile}/>}
           {view==='today' && <TodayPage leads={leads} activity={activity} team={team} campaigns={campaigns} reload={reloadAll} openLead={openLead} goTo={go} openDispo={openDispo} isMobile={isMobile}/>}
           {view==='dispo' && <DispoPage key={dispoId||'all'} leads={leads} activity={activity} reloadLeads={reloadQuiet} openLead={openLead} initialDeal={dispoId} isMobile={isMobile}/>}
           {view==='kpis' && <KpiPage leads={leads} campaigns={campaigns} team={team} activity={activity} actErr={actErr} reload={loadActivity} isMobile={isMobile} goTo={go}/>}
@@ -186,7 +188,7 @@ function ErrorBanner({msg,onRetry,onClose}){
   )
 }
 
-function LeadsPage({leads,campaigns=[],loading,reload,reloadQuiet,loadErr,activity,reloadActivity,onAnalyze,initialSel,isMobile}){
+function LeadsPage({leads,campaigns=[],loading,reload,reloadQuiet,loadErr,activity,reloadActivity,onAnalyze,onScript,initialSel,isMobile}){
   const [campFilter,setCampFilter] = useState('')
   const [selId,setSelId] = useState(()=>{ const l=leads.find(x=>String(x.id)===String(initialSel)); return l?l.id:null })
   const [showAdd,setShowAdd] = useState(false)
@@ -361,13 +363,13 @@ function LeadsPage({leads,campaigns=[],loading,reload,reloadQuiet,loadErr,activi
           </div>
           {shown.length>limit && <button onClick={()=>setLimit(limit+300)} style={{width:'100%',marginTop:8,background:'transparent',border:'1px solid '+C.line,color:C.muted,borderRadius:8,padding:'8px',fontSize:12,cursor:'pointer'}}>Show more ({(shown.length-limit).toLocaleString()} left)</button>}
         </div>
-        {sel && <LeadDetail key={sel.id} lead={sel} onDelete={()=>remove(sel.id)} onEdit={()=>openEdit(sel)} activity={activity} reloadActivity={reloadActivity} reloadLeads={reloadQuiet} onAnalyze={()=>onAnalyze(sel.id)} isMobile={isMobile}/>}
+        {sel && <LeadDetail key={sel.id} lead={sel} onDelete={()=>remove(sel.id)} onEdit={()=>openEdit(sel)} activity={activity} reloadActivity={reloadActivity} reloadLeads={reloadQuiet} onAnalyze={()=>onAnalyze(sel.id)} onScript={onScript} isMobile={isMobile}/>}
       </div>}
     </div>
   )
 }
 
-function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,reloadLeads,onAnalyze,isMobile}){
+function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,reloadLeads,onAnalyze,onScript,isMobile}){
   const s=scoreOf(lead); const g=grade(s); const eq=eqOf(lead)
 
   return (
@@ -417,7 +419,7 @@ function LeadDetail({lead,onDelete,onEdit,activity,reloadActivity,reloadLeads,on
       </div>
 
       <div style={{display:'flex',flexDirection:'column',gap:16}}>
-        <ScriptPanel lead={lead}/>
+        <ScriptPanel lead={lead} onOpenScript={onScript?()=>onScript(lead.id):null}/>
         <LogCall lead={lead} activity={activity} reloadActivity={reloadActivity} reloadLeads={reloadLeads}/>
         <DealPanel lead={lead} activity={activity} reloadLeads={reloadLeads}/>
         <HandoffPanel lead={lead} reloadLeads={reloadLeads}/>

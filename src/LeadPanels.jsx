@@ -1,6 +1,7 @@
 import { leadPhones, BAD, PHONE_STATUS, markPhone, setLeadDnc, fmtPhone } from './phones'
 import { useState } from 'react'
 import { lockCheck } from './dealMath'
+import { stepsFor, scriptVars, fillText } from './scriptContent'
 import { LockChecks } from './DealSafety'
 import { LOST_REASONS, CHECK_BACK, reasonLabel, addDays, fmtDay } from './deals'
 import { PILLARS, researchLinks, REPAIRS, detailsOf, money, compResult, stageOf, stageIdx, STAGE, OUTCOME_STAGE, moveStage, patchLead, callbackOf, callbackState, fmtWhen } from './leadModel'
@@ -258,7 +259,7 @@ export function CallCard({lead,onEdit,onAnalyze}){
   )
 }
 
-export function ScriptPanel({lead}){
+export function ScriptPanel({lead, role='closer', onOpenScript}){
   const [stage,setStage] = useState(0)
   const [obj,setObj] = useState(null)
   const d = detailsOf(lead)
@@ -268,44 +269,11 @@ export function ScriptPanel({lead}){
   const hi = flagged.reduce((s,r)=>s+r[3],0)
   const repairsTxt = flagged.length ? flagged.map(r=>r[1].toLowerCase()).join(', ') : 'the repairs we talked about'
   const ammoTxt = flagged.length ? money(lo)+'–'+money(hi) : 'serious money'
-  const arv = Number(lead.arv)||0
-  const cr = compResult(lead)
-  const ceiling = cr ? cr.open : arv ? Math.max(0, Math.round(arv*0.70 - (flagged.length?hi:20000) - 15000)) : 0
-  const offerTxt = ceiling ? (cr?money(ceiling):'about '+money(ceiling)) : '[your offer]'
   const ask = Number(d.asking_price)||0
-  const tl = d.timeline!=='Unsure' ? d.timeline : '30 days'
-  const reason = d.sell_reason!=='Unknown' ? d.sell_reason.toLowerCase() : 'your situation'
-  const addr = (lead.address||'your property')+(lead.city?(' in '+lead.city):'')
 
-  const stages = [
-    {t:'1 · Intro — own the frame', goal:'First 60 seconds. You are qualifying THEM.', lines:[
-      '"Hey, is this '+first+'? ... '+first+', this is ___ with Icole Agency. I\'m reaching out about '+addr+' — we buy houses '+(lead.city?('in '+lead.city):'in your area')+' for cash, and yours came across my desk. Got two minutes?"',
-      '"Now, I can\'t promise we\'re a fit — first I need to see whether the property even QUALIFIES for our program. Mind if I ask a few quick questions?"',
-    ]},
-    {t:'2 · Fact-find — the 4 pillars', goal:'Condition → motivation → timeline → price. Check the repair boxes on the Call Card while they talk.', lines:[
-      '"Tell me about the house — if I walked in the front door today, what would I see?"',
-      '"When\'s the last time the roof was done? HVAC? Hot water tank?"',
-      '"And what\'s got you potentially thinking about selling? ... How long has that been going on?"',
-      '"If everything lined up, when would you want this done — 30 days, 60, or just exploring?"',
-      '"Last one: if I could close on your timeline and you didn\'t fix a thing — what number works for you?"',
-    ]},
-    {t:'3 · Pitch — sell the situation', goal:'Mirror their pillars back. You\'re selling certainty, not buying a house.', lines:[
-      '"Here\'s what I\'m hearing: '+reason+', the house needs '+repairsTxt+', and you want this handled '+(tl==='ASAP'?'as soon as possible':'within '+tl)+'."',
-      '"That\'s exactly what we\'re built for — cash, as-is, no repairs, no agents, no fees, and YOU pick the closing date."',
-    ]},
-    {t:'4 · Offer — anchor with repair math', goal:'The repairs justify the number. Then make the money feel real.', lines:[
-      flagged.length
-        ? '"A retail buyer would need '+ammoTxt+' of work before a bank touches this — '+repairsTxt+'. That\'s why cash matters here."'
-        : '"A retail buyer would need serious repair money before a bank touches a house like this — that\'s why cash matters here."',
-      '"Based on all that, I\'m at '+offerTxt+(ask?(' — I know you mentioned '+money(ask)+', so let\'s talk about the gap'):'')+'."',
-      '"Let me ask you something: when\'s the last time you had access to that kind of money in one wire?"',
-    ]},
-    {t:'5 · Close — assume it, calendar it', goal:'Never "so what do you think?" Go straight to logistics.', lines:[
-      '"Here\'s what happens next: I send the agreement tonight, you sign it right from your phone, and title gets started tomorrow."',
-      '"What\'s the best email for you?"',
-    ]},
-  ]
-
+  // Same script as the Scripts page (one source), filled with this lead.
+  const sv = scriptVars(lead, getCaller())
+  const stages = stepsFor(role).map((x,n)=>({ t:(n+1)+' · '+x.title, goal:fillText(x.goal, sv), lines:x.say.map(l=>'"'+fillText(l, sv)+'"') }))
   const objections = [
     ['price','"Price is too low"', ask&&flagged.length
       ? '"I hear you. You mentioned '+money(ask)+' — but walk through it with me: '+repairsTxt+' runs '+ammoTxt+'. Take that off '+money(ask)+' and we\'re not far apart — except my number is cash, certain, and done on your timeline."'
@@ -323,7 +291,7 @@ export function ScriptPanel({lead}){
   return (
     <div style={{background:C.panel,border:'1px solid '+C.line,borderRadius:16,padding:22}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
-        <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:1}}>Live Call Script</div>
+        <div style={{fontWeight:700,fontSize:13,textTransform:'uppercase',letterSpacing:1}}>Live Call Script {onOpenScript && <span onClick={onOpenScript} style={{color:C.orange,fontSize:11,textTransform:'none',letterSpacing:0,cursor:'pointer',marginLeft:6}}>Open full script →</span>}</div>
         <div style={{display:'flex',gap:5}}>
           {stages.map((_,i)=>(
             <span key={i} onClick={()=>{setStage(i);setObj(null)}} style={{width:9,height:9,borderRadius:9,background:i===stage?C.orange:i<stage?C.orange+'66':C.line,cursor:'pointer'}}/>

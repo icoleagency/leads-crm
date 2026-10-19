@@ -181,7 +181,7 @@ export function SignupLink({buyers,leads,onDone,isMobile}){
         <button onClick={onDone} style={btn(false)}>Close</button>
       </div>
       <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'1fr 1.4fr',gap:10,marginTop:12}}>
-        <label style={{color:C.muted,fontSize:11.5}}>Business name shown on the page<input value={brand} onChange={e=>{ setBrand(e.target.value); persist(e.target.value,markets) }} placeholder="e.g. Icole Agency" style={{...inp,marginTop:3}}/></label>
+        <label style={{color:C.muted,fontSize:11.5}}>Business name shown on the page<input value={brand} onChange={e=>{ setBrand(e.target.value); persist(e.target.value,markets) }} placeholder="e.g. Coleman Home Buyers" style={{...inp,marginTop:3}}/></label>
         <label style={{color:C.muted,fontSize:11.5}}>Areas buyers can tap (comma separated)<input value={markets} onChange={e=>{ setMarkets(e.target.value); persist(brand,e.target.value) }} placeholder="e.g. Duval, Clay, St Johns" style={{...inp,marginTop:3}}/></label>
       </div>
       <div style={{display:'flex',gap:8,alignItems:'center',marginTop:12,flexWrap:'wrap'}}>
